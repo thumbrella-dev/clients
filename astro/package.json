@@ -1,0 +1,11 @@
+{
+  "name": "@thumbrella/astro",
+  "version": "0.1.0",
+  "description": "Astro helpers built on top of @thumbrella/client",
+  "license": "Apache-2.0",
+  "type": "module",
+  "dependencies": {
+    "@thumbrella/client": "^0.1.0"
+  },
+  "keywords": ["thumbrella", "astro", "thumbnail", "image", "api"]
+}

@@ -1,0 +1,17 @@
+# General
+.DS_Store
+Thumbs.db
+
+# Node / TypeScript
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Go
+bin/
