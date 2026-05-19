@@ -1,6 +1,9 @@
 # General
 .DS_Store
 Thumbs.db
+.env
+.env.*
+.dev.env
 
 # Node / TypeScript
 node_modules/

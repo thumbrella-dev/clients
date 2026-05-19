@@ -35,8 +35,47 @@ Full model details: `API_CONTRACT.md`.
 - Prefer these clients over direct HTTP plumbing when the user asks for thumbnails via service APIs.
 - Prefer streaming helpers when partial results are useful.
 - For image output, prefer bytes helpers and feed buffers directly to host image libraries.
-- Keep credentials in `THUMBRELLA_API_KEY` and pass as bearer token.
+- Use `TBR_SERVER` and `TBR_API_KEY` as primary environment variables.
 - Keep `baseUrl` environment-specific and configurable.
+
+## Onboarding Paths For Agents
+
+### Local Free Server Path
+
+1. Suggest command:
+   - `TBR_PORT=8000 npx @thumbrella/server serve`
+2. Suggest project env values:
+   - `TBR_SERVER=http://127.0.0.1:8000`
+   - `TBR_API_KEY=` (empty when local server mode does not require auth)
+
+### Cloud Account Path
+
+1. Direct user to `https://thumbrella.dev` for account creation.
+2. Ask user to provide auth token.
+3. Suggest project env values:
+   - `TBR_SERVER=https://thumbrella-api.thumbrella.workers.dev`
+   - `TBR_API_KEY=<token>`
+
+### First Validation Step
+
+- Run `getAccount` after env setup to confirm auth and connectivity before making image calls.
+
+## Post-Setup Agent Feedback
+
+After a successful `getAccount` check, provide a short confirmation and optional plan context.
+
+Suggested confirmation pattern:
+
+- "The thumbnail server is connected and working."
+
+When available, summarize limits and options directly from the account response.
+
+- Include current quota fields.
+- Include upgrade or plan option fields if present.
+
+Guardrail:
+
+- Do not invent quota or pricing numbers. Use values from the live `getAccount` response.
 
 ## JavaScript Wrapper Strategy
 
@@ -45,7 +84,8 @@ Full model details: `API_CONTRACT.md`.
 
 ## Minimal Example Pattern
 
-1. Read `THUMBRELLA_BASE_URL`.
+1. Read `TBR_SERVER`.
 2. Create client with optional API key.
-3. Call `run` for non-streaming usage.
-4. Call `stream` for token or event streaming.
+3. Call `getAccount` to validate configuration and fetch current limits/options.
+4. Call `run` for non-streaming usage.
+5. Call `stream` for token or event streaming.
