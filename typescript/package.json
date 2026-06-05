@@ -9,9 +9,18 @@
     "build": "tsc -p tsconfig.json",
     "account": "tsx scripts/account.ts"
   },
-  "keywords": ["thumbrella", "client", "sdk", "thumbnail", "image", "streaming", "api"],
+  "keywords": [
+    "thumbrella",
+    "client",
+    "sdk",
+    "thumbnail",
+    "image",
+    "streaming",
+    "api"
+  ],
   "license": "Apache-2.0",
   "devDependencies": {
+    "@types/node": "^25.9.1",
     "dotenv": "^16.4.5",
     "typescript": "^5.6.3"
   }
