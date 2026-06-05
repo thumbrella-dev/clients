@@ -21,9 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 async = ["aiohttp>=3.9.0"]
-pil = ["Pillow"]
-numpy = ["numpy", "Pillow"]
-all = ["aiohttp>=3.9.0", "Pillow", "numpy"]
+all = ["aiohttp>=3.9.0", "numpy"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

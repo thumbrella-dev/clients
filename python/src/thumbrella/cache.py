@@ -17,6 +17,15 @@ if TYPE_CHECKING:
 class Cache(ABC):
     """Abstract base class for result caches."""
 
+    def __eq__(self, other: object) -> bool:
+        return self is other
+
+    def __ne__(self, other: object) -> bool:
+        return not self == other
+
+    def __hash__(self) -> int:
+        return object.__hash__(self)
+
     @abstractmethod
     def get(self, url: str) -> Result | None:
         """Return a cached :class:`Result` for *url*, or ``None``."""
@@ -61,6 +70,13 @@ class MemoryCache(Cache):
         self._order: list[str] = []  # LRU order: front = most recent
         self._hits = 0
         self._misses = 0
+
+    def __repr__(self) -> str:
+        return (
+            f"<thumbrella.MemoryCache "
+            f"items={len(self._store)}/{self._max_items} "
+            f"hits={self._hits}/{self._hits + self._misses}>"
+        )
 
     def get(self, url: str) -> Result | None:
         try:

@@ -1,0 +1,16 @@
+MANIFEST.in
+README.md
+pyproject.toml
+src/thumbrella/__init__.py
+src/thumbrella/_placeholders.py
+src/thumbrella/cache.py
+src/thumbrella/client.py
+src/thumbrella/constants.py
+src/thumbrella/errors.py
+src/thumbrella/result.py
+src/thumbrella/placeholders/failed.jpg
+src/thumbrella_client.egg-info/PKG-INFO
+src/thumbrella_client.egg-info/SOURCES.txt
+src/thumbrella_client.egg-info/dependency_links.txt
+src/thumbrella_client.egg-info/requires.txt
+src/thumbrella_client.egg-info/top_level.txt

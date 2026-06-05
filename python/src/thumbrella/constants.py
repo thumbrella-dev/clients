@@ -5,9 +5,9 @@ class Status:
     """Job status values returned by the server."""
 
     SUCCESS = "success"
-    NOT_MODIFIED = "not_modified"
-    UNAVAILABLE = "unavailable"
     FAILED = "failed"
+    OVERLOADED = "overloaded"
+    INTERMEDIATE = "intermediate"
 
     # Client-side synthetic status (server unreachable)
     CLIENT_ERROR = "client_error"
@@ -28,10 +28,19 @@ class FileKind:
     UNKNOWN = "unknown"
 
 
+class Source:
+    """How the thumbnail was produced.  ``None`` on failure."""
+
+    RENDER = "render"
+    SHORTCUT = "shortcut"
+    CACHE = "cache"
+    CLIENT = "client"
+
+
 class Strategy:
     """Processing strategy used — matches the server's ``Strategy`` enum."""
 
     RENDER = "render"
-    SHORTCUT = "shortcut"
+    PROGRESSIVE = "progressive"
+    EMBEDDED = "embedded"
     FALLBACK = "fallback"
-    HANDOFF = "handoff"

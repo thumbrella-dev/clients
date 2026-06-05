@@ -3,16 +3,11 @@
 Usage:
     import thumbrella
 
-    tbr = thumbrella.Client(connect="http://localhost:8001")
-    # or with a handshake secret:
-    # tbr = thumbrella.Client(connect="http://localhost:8001#my-handshake")
+    tbr = thumbrella.Client().verify()
 
-    tbr.verify()
-
-    result = tbr.thumb("https://example.com/photo.jpg")
-    result.data  # JPEG bytes
-    img = result.to_pil()        # PIL Image (optional)
-    arr = result.to_numpy()      # numpy array (optional)
+    result = tbr.thumb("https://example.com/photo.jpg").verify()
+    result.thumbnail.bytes  # JPEG bytes
+    result.thumbnail.io     # zero-copy read-only stream
 
     print(result.kind, result.mime, result.file_size)
     if result.is_fresh():
@@ -22,7 +17,7 @@ Usage:
 from .client import Client
 from .result import Result
 from .cache import Cache, MemoryCache
-from .constants import Status, FileKind, Strategy
+from .constants import Source, Status, FileKind, Strategy
 from .errors import ThumbError
 
 __all__ = [
@@ -30,6 +25,7 @@ __all__ = [
     "Result",
     "Cache",
     "MemoryCache",
+    "Source",
     "Status",
     "FileKind",
     "Strategy",
