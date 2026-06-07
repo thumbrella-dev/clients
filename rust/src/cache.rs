@@ -1,14 +1,14 @@
 //! Result caches — reduce server round-trips for repeated URLs.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
-use crate::types::ResultData;
+use crate::types::Media;
 
-/// Abstract result cache.
+/// Abstract result cache stored as Media entries.
 pub trait Cache: Send + Sync {
-    fn get(&self, url: &str) -> Option<Arc<Mutex<ResultData>>>;
-    fn put(&self, result: &Arc<Mutex<ResultData>>);
+    fn get(&self, url: &str) -> Option<Media>;
+    fn put(&self, media: &Media);
     fn remove(&self, url: &str);
     fn clear(&self);
     fn len(&self) -> usize;
@@ -19,7 +19,7 @@ pub trait Cache: Send + Sync {
 /// In-memory LRU-ish cache with a size limit.
 pub struct MemoryCache {
     max_items: usize,
-    store: Mutex<HashMap<String, Arc<Mutex<ResultData>>>>,
+    store: Mutex<HashMap<String, Media>>,
     order: Mutex<Vec<String>>,
     hits_count: Mutex<u64>,
     misses_count: Mutex<u64>,
@@ -44,15 +44,15 @@ impl Default for MemoryCache {
 }
 
 impl Cache for MemoryCache {
-    fn get(&self, url: &str) -> Option<Arc<Mutex<ResultData>>> {
+    fn get(&self, url: &str) -> Option<Media> {
         let store = self.store.lock().unwrap();
         match store.get(url) {
-            Some(result) => {
+            Some(media) => {
                 *self.hits_count.lock().unwrap() += 1;
                 let mut order = self.order.lock().unwrap();
                 order.retain(|u| u != url);
                 order.insert(0, url.to_string());
-                Some(Arc::clone(result))
+                Some(media.clone())
             }
             None => {
                 *self.misses_count.lock().unwrap() += 1;
@@ -61,8 +61,8 @@ impl Cache for MemoryCache {
         }
     }
 
-    fn put(&self, result: &Arc<Mutex<ResultData>>) {
-        let url = result.lock().unwrap().url.clone();
+    fn put(&self, media: &Media) {
+        let url = media.url.clone();
         let mut store = self.store.lock().unwrap();
         let mut order = self.order.lock().unwrap();
 
@@ -73,7 +73,7 @@ impl Cache for MemoryCache {
                 store.remove(&stale);
             }
         }
-        store.insert(url.clone(), Arc::clone(result));
+        store.insert(url.clone(), media.clone());
         order.insert(0, url);
     }
 

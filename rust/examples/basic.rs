@@ -24,24 +24,22 @@ async fn main() {
 }
 
 async fn thumbnail(url: &str, path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    // Client reads TBR_CONNECT env var for server URL or cloud token.
-    // verify() ensures the connection is good before proceeding.
     let tbr = Client::new(None);
     tbr.verify().await?;
 
-    // thumb() auto-verifies — returns Err on failure instead of a
-    // placeholder like batch() or stream() would.
     let result = tbr.thumb(url).await?;
-    let guard = result.lock().unwrap();
-
-    fs::write(path, guard.thumbnail.bytes())?;
-    println!(
-        "{}  {:>8}  ->  {:>5} bytes  ({})  {path}",
-        guard.kind.as_deref().unwrap_or("?"),
-        guard.file_size.map_or("?".into(), |s| s.to_string()),
-        guard.thumbnail.len(),
-        guard.source.as_deref().unwrap_or("render"),
-    );
+    if let Some(media) = &result.media {
+        fs::write(path, media.thumbnail.bytes())?;
+        println!(
+            "{} {:>8}  ->  {:>5} bytes  ({})  {path}",
+            media.kind,
+            media.file_size,
+            media.thumbnail.len(),
+            result.source.as_deref().unwrap_or("render"),
+        );
+    } else {
+        eprintln!("No media in result (status: {})", result.status);
+    }
 
     Ok(())
 }

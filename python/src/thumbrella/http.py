@@ -156,16 +156,28 @@ async def aio_ndjson(
     async with session.post(
         url, json=json_body, headers=headers, **kwargs
     ) as response:
-        record_backoff(host, response.status_code in (429, 503))
+        record_backoff(host, response.status in (429, 503))
 
         if not response.ok:
             return
-        async for raw_line in response.content:
-            line = raw_line.decode("utf-8").strip()
-            if not line:
-                continue
-            try:
-                yield json.loads(line)
-            except json.JSONDecodeError:
-                pass
+        buf = b""
+        async for chunk in response.content:
+            buf += chunk
+            while b"\n" in buf:
+                raw_line, buf = buf.split(b"\n", 1)
+                line = raw_line.decode("utf-8").strip()
+                if not line:
+                    continue
+                try:
+                    yield json.loads(line)
+                except json.JSONDecodeError:
+                    pass
+        # Flush any trailing data without a final newline.
+        if buf:
+            line = buf.decode("utf-8").strip()
+            if line:
+                try:
+                    yield json.loads(line)
+                except json.JSONDecodeError:
+                    pass
 

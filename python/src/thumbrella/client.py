@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 import requests
 
 from .cache import Cache, MemoryCache, put_all_caches
-from .constants import DEFAULT_BASE, Source, Status
+from .constants import DEFAULT_BASE, HTTP_TIMEOUT, Source, Status
 from .errors import ConnectionError, TimeoutError, VerifyError
 from .result import EncodedJpeg, Media, Result
 from .http import parse_connect, requests_json, aio_ndjson
@@ -149,7 +149,6 @@ class Client:
         to the server as a streaming batch; each result is yielded as it
         arrives via NDJSON.
         """
-        # Handle fresh urls immediately
         done, stale = preflight_urls(urls, self.caches)
         for url in urls:
             if url in done:
@@ -158,31 +157,40 @@ class Client:
             return
 
         pending: set[str] = {item["url"] for item in stale}
-        #headers = {self.session.headers, "Accept": "application/x-ndjson"}
-        #url = f"{self.base_url}/batch"
 
         import aiohttp
         if self._asession is None:
-            self._asession = aiohttp.ClientSession()
+            timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT)
+            self._asession = aiohttp.ClientSession(timeout=timeout)
 
+        msg = ""
         try:
             async for item in aio_ndjson(
                 self._asession, self.host_name, self.base_url, "/batch",
                 json={"items": stale}, headers={"Accept": "application/x-ndjson"},
             ):
-                item_url = item.get("url", "")
-                if item.get("status") != Status.INTERMEDIATE:
+                kind = item.get("type", "")
+                result_data = item.get("result")
+                if not result_data or kind not in ("item.intermediate", "item.result"):
+                    continue
+                item_url = result_data.get("url", "")
+                if kind == "item.result":
                     pending.discard(item_url)
                 result = _result_from_server(
-                    item, caches=self.caches, server_key=self.base_url
+                    result_data, caches=self.caches, server_key=self.base_url
                 )
                 yield result
-        except Exception:
-            pass
+        except Exception as exc:
+            msg = str(exc) or type(exc).__name__
 
         for item_url in pending:
-            yield Result.client_fail(item_url, "stream connection lost")
+            yield Result.client_fail(item_url, msg or "stream connection lost")
 
+    async def __aenter__(self) -> Client:
+        return self
+
+    async def __aexit__(self, *_: Any) -> None:
+        await self.close()
 
     def clear_caches(self) -> None:
         """Remove all entries from all registered caches."""

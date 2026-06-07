@@ -1,52 +1,97 @@
 //! Async Thumbrella client.
 
-use reqwest::{Client as HttpClient, RequestBuilder};
+use reqwest::Client as HttpClient;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
+use std::time::Duration;
 
 use crate::cache::{Cache, MemoryCache};
 use crate::types::*;
 
 const DEFAULT_BASE: &str = "http://api.thumbrella.dev/";
+const HTTP_TIMEOUT_SECS: u64 = 12;
+const MAX_BACKOFF_SECS: u64 = 60;
+
+// ── global backoff ───────────────────────────────────────────────────────
+
+struct Backoff {
+    hosts: Mutex<HashMap<String, (std::time::Instant, u32)>>,
+}
+
+impl Backoff {
+    fn new() -> Self {
+        Self { hosts: Mutex::new(HashMap::new()) }
+    }
+
+    fn check(&self, host: &str) -> Result<(), Error> {
+        let map = self.hosts.lock().unwrap();
+        if let Some(&(until, _)) = map.get(host) {
+            if std::time::Instant::now() < until {
+                return Err(Error::Connection(format!("{host} is throttled, retry later")));
+            }
+        }
+        Ok(())
+    }
+
+    fn record(&self, host: &str, throttled: bool) {
+        let mut map = self.hosts.lock().unwrap();
+        if throttled {
+            let failures = map.get(host).map_or(1, |&(_, f)| f + 1);
+            let delay = Duration::from_secs((2u64.pow(failures)).min(MAX_BACKOFF_SECS));
+            map.insert(host.to_string(), (std::time::Instant::now() + delay, failures));
+        } else {
+            map.remove(host);
+        }
+    }
+}
 
 // ── connect string parsing ───────────────────────────────────────────────
 
 struct ConnectConfig {
     base_url: String,
+    host: String,
     headers: HashMap<String, String>,
 }
 
 fn parse_connect(connect: Option<&str>) -> ConnectConfig {
     let raw: String = connect.map(String::from)
         .or_else(|| std::env::var("TBR_CONNECT").ok())
-        .or_else(|| std::env::var("TBR_SERVER").ok())
         .unwrap_or_else(|| DEFAULT_BASE.to_string());
-    let raw = raw.as_str();
 
-    // Bearer token — no scheme.
+    // Bare token — no scheme.
     if !raw.contains("://") {
         let mut headers = HashMap::new();
         headers.insert("Authorization".into(), format!("Bearer {raw}"));
-        return ConnectConfig { base_url: DEFAULT_BASE.into(), headers };
+        return ConnectConfig {
+            base_url: DEFAULT_BASE.into(),
+            host: "api.thumbrella.dev".into(),
+            headers,
+        };
     }
 
-    // URL with optional fragment headers.
-    let (base, fragment) = raw.split_once('#').unwrap_or((raw, ""));
-    let base_url = base.trim_end_matches('/').to_string();
-    let mut headers = HashMap::new();
+    // Split on first comma to separate URL from optional suffix.
+    let (url_part, suffix) = raw.split_once(',').unwrap_or((&raw, ""));
+    let base_url = url_part.trim_end_matches('/').to_string();
 
-    for seg in fragment.split('&').filter(|s| !s.is_empty()) {
-        let seg = seg.trim();
+    let host = url_part
+        .split("://")
+        .nth(1)
+        .unwrap_or("")
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .to_string();
+
+    let mut headers = HashMap::new();
+    for seg in suffix.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
         if let Some((k, v)) = seg.split_once('=') {
             headers.insert(k.trim().to_string(), v.trim().to_string());
-        } else if seg.starts_with("tbr_") {
-            headers.insert("Authorization".into(), format!("Bearer {seg}"));
         } else {
-            headers.insert("x-tbr-handshake".into(), seg.to_string());
+            headers.insert("Authorization".into(), format!("Bearer {seg}"));
         }
     }
 
-    ConnectConfig { base_url, headers }
+    ConnectConfig { base_url, host, headers }
 }
 
 // ── Client ────────────────────────────────────────────────────────────────
@@ -55,17 +100,21 @@ fn parse_connect(connect: Option<&str>) -> ConnectConfig {
 ///
 /// ```no_run
 /// # async fn example() -> Result<(), thumbrella::Error> {
-/// let tbr = thumbrella::Client::new(None).verify().await?;
+/// let tbr = thumbrella::Client::new(None);
+/// tbr.verify().await?;
 /// let result = tbr.thumb("https://example.com/photo.jpg").await?;
-/// println!("{} bytes", result.thumbnail.len());
+/// if let Some(media) = &result.media {
+///     println!("{} bytes", media.thumbnail.len());
+/// }
 /// # Ok(())
 /// # }
 /// ```
 pub struct Client {
     base_url: String,
+    host: String,
     http: HttpClient,
     caches: Vec<Box<dyn Cache>>,
-    results: Mutex<HashMap<String, Arc<Mutex<ResultData>>>>,
+    backoff: Backoff,
 }
 
 impl Client {
@@ -74,7 +123,7 @@ impl Client {
         Self::with_caches(connect, vec![Box::new(MemoryCache::default())])
     }
 
-    /// Create a client with custom caches.  Pass an empty vec for no caching.
+    /// Create a client with custom caches. Pass an empty vec for no caching.
     pub fn with_caches(connect: Option<&str>, caches: Vec<Box<dyn Cache>>) -> Self {
         let cfg = parse_connect(connect);
         let mut default_headers = reqwest::header::HeaderMap::new();
@@ -93,13 +142,14 @@ impl Client {
 
         Self {
             base_url: cfg.base_url,
+            host: cfg.host,
             http: HttpClient::builder()
                 .default_headers(default_headers)
-                .timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
                 .build()
                 .expect("reqwest client"),
             caches,
-            results: Mutex::new(HashMap::new()),
+            backoff: Backoff::new(),
         }
     }
 
@@ -122,15 +172,17 @@ impl Client {
 
     // ── public API ───────────────────────────────────────────────────────
 
-    /// Check connectivity.
+    /// Check connectivity. Returns `Ok(())` on success.
     pub async fn verify(&self) -> Result<(), Error> {
         let path = if self.base_url == DEFAULT_BASE { "/token" } else { "/health" };
         let resp = self.request("GET", path).send().await.map_err(|e| {
-            Error::Connection(format!("{self}: {e}", self = self.base_url))
+            Error::Connection(format!("{}: {e}", self.base_url))
         })?;
-        let status = resp.status();
+        let code = resp.status().as_u16();
+        self.backoff.record(&self.host, code == 429 || code == 503);
+
         let data: HealthResponse = resp.json().await.map_err(|e| {
-            Error::Http(status.as_u16(), e.to_string())
+            Error::Http(code, e.to_string())
         })?;
         if data.status != "ok" {
             return Err(Error::Verify(format!("unexpected response: {data:?}")));
@@ -138,127 +190,149 @@ impl Client {
         Ok(())
     }
 
-    /// Fetch a thumbnail for a single URL.  Returns `Err` on failure.
-    pub async fn thumb(&self, url: &str) -> Result<Arc<Mutex<ResultData>>, Error> {
+    /// Fetch a thumbnail for a single URL. Returns `Err` on failure.
+    pub async fn thumb(&self, url: &str) -> Result<ResultData, Error> {
         let results = self.batch(&[url]).await?;
         let result = results.into_iter().next().unwrap();
-        let guard = result.lock().unwrap();
-        if guard.status != status::SUCCESS {
+        if result.status != status::SUCCESS {
             return Err(Error::Thumb {
                 url: url.to_string(),
-                status: guard.status.clone(),
-                msg: guard.message.clone(),
+                status: result.status.clone(),
+                msg: result.message.clone(),
             });
         }
-        drop(guard);
         Ok(result)
     }
 
     /// Fetch thumbnails for multiple URLs in one request.
-    pub async fn batch(&self, urls: &[&str]) -> Result<Vec<Arc<Mutex<ResultData>>>, Error> {
-        let results: Vec<Arc<Mutex<ResultData>>> = urls
-            .iter()
-            .map(|u| self.get_or_create(u))
-            .collect();
+    pub async fn batch(&self, urls: &[&str]) -> Result<Vec<ResultData>, Error> {
+        let mut done: HashMap<String, ResultData> = HashMap::new();
+        let mut stale_items: Vec<serde_json::Value> = Vec::new();
 
-        let mut items = Vec::new();
-        let mut fetch_indices = Vec::new();
+        for &url in urls {
+            if !url.contains("://") {
+                let mut r = ResultData::new(url.to_string());
+                r.set_client_error("invalid URL");
+                done.insert(url.to_string(), r);
+                continue;
+            }
 
-        for (i, r_arc) in results.iter().enumerate() {
-            let mut r = r_arc.lock().unwrap();
-
-            // Check caches for existing data.
+            // Check caches for a fresh entry.
+            let mut fresh = false;
             for cache in &self.caches {
-                if let Some(cached) = cache.get(&r.url) {
-                    let cached_guard = cached.lock().unwrap();
-                    if !Arc::ptr_eq(&cached, r_arc) {
-                        r.clone_fields_from(&cached_guard);
+                if let Some(cached) = cache.get(url) {
+                    if cached.is_fresh() {
+                        let mut r = ResultData::new(url.to_string());
+                        r.status = status::SUCCESS.to_string();
+                        r.source = Some(source::CACHE.to_string());
+                        r.media = Some(cached.clone());
+                        done.insert(url.to_string(), r);
+                        fresh = true;
+                        break;
                     }
                 }
             }
-
-            if r.is_fresh() {
-                r.source = Some(source::CLIENT.to_string());
+            if fresh {
                 continue;
             }
-            fetch_indices.push(i);
-            let mut item = serde_json::json!({ "url": r.url });
-            if let Some(ref cache) = r.cache {
-                item["cache"] = serde_json::Value::String(cache.clone());
-            }
-            items.push(item);
-        }
 
-        if items.is_empty() {
-            return Ok(results);
-        }
-
-        let body = serde_json::json!({ "items": items });
-        let resp = match self.request("POST", "/batch").json(&body).send().await {
-            Ok(r) => r,
-            Err(_) => {
-                for &i in &fetch_indices {
-                    results[i].lock().unwrap().set_client_error("server unreachable");
+            let mut item = serde_json::json!({ "url": url });
+            for cache in &self.caches {
+                if let Some(cached) = cache.get(url) {
+                    if let Some(ref cache_str) = cached.cache {
+                        item["cache"] = serde_json::Value::String(cache_str.clone());
+                        break;
+                    }
                 }
-                return Ok(results);
+            }
+            stale_items.push(item);
+        }
+
+        if stale_items.is_empty() {
+            return Ok(urls.iter().map(|u| done.remove(*u).unwrap()).collect());
+        }
+
+        self.backoff.check(&self.host)?;
+
+        let body = serde_json::json!({ "items": stale_items });
+        let resp = match self.request("POST", "/batch")
+            .header("Accept", "application/json")
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(self.collect_results(urls, &done, |url| {
+                    let mut r = ResultData::new(url.to_string());
+                    r.set_client_error(&format!("server unreachable: {e}"));
+                    r
+                }));
             }
         };
 
-        let status_code = resp.status().as_u16();
+        let code = resp.status().as_u16();
+        self.backoff.record(&self.host, code == 429 || code == 503);
+
         if !resp.status().is_success() {
-            for r in &results {
-                r.lock().unwrap().set_client_error(&format!("server returned {status_code}"));
-            }
-            return Ok(results);
+            return Ok(self.collect_results(urls, &done, |url| {
+                let mut r = ResultData::new(url.to_string());
+                r.set_client_error(&format!("server returned {code}"));
+                r
+            }));
         }
 
         let batch: BatchResponse = resp.json().await.map_err(|e| {
-            Error::Http(status_code, e.to_string())
+            Error::Http(code, e.to_string())
         })?;
 
-        for (i, item) in batch.items.into_iter().enumerate() {
-            if i < results.len() {
-                let mut r = results[i].lock().unwrap();
-                r.update_from_json(serde_json::to_value(item).unwrap_or_default());
+        for item in batch.items {
+            if let Some(ref media) = item.media {
+                for cache in &self.caches {
+                    cache.put(media);
+                }
             }
+            done.insert(item.url.clone(), item);
         }
 
-        // Store results in caches.
-        for r in &results {
-            for cache in &self.caches {
-                cache.put(r);
-            }
-        }
-
-        Ok(results)
+        Ok(self.collect_results(urls, &done, |url| {
+            let mut r = ResultData::new(url.to_string());
+            r.set_client_error("no result from server");
+            r
+        }))
     }
 
     /// Stream thumbnail results as they complete.
     ///
-    /// Note: streaming requires the `stream` feature (not yet implemented).
-    #[allow(unused_variables)]
-    pub async fn stream(
+    /// Currently delegates to [`batch`] — true NDJSON streaming is not yet
+    /// implemented. Results are still collected and returned in order.
+    pub async fn stream(&self, urls: &[&str]) -> Result<Vec<ResultData>, Error> {
+        self.batch(urls).await
+    }
+
+    // ── helpers ──────────────────────────────────────────────────────────
+
+    fn collect_results<F>(
         &self,
         urls: &[&str],
-    ) -> Result<Vec<Arc<Mutex<ResultData>>>, Error> {
-        Err(Error::Http(0, "stream not yet implemented — use batch()".into()))
+        done: &HashMap<String, ResultData>,
+        fallback: F,
+    ) -> Vec<ResultData>
+    where
+        F: Fn(&str) -> ResultData,
+    {
+        urls.iter()
+            .map(|&u| done.get(u).cloned().unwrap_or_else(|| fallback(u)))
+            .collect()
     }
 
-    /// Low-level HTTP request builder.  Prefer `thumb()` / `batch()`.
-    pub fn request(&self, method: &str, path: &str) -> RequestBuilder {
+    /// Low-level HTTP request builder.
+    pub fn request(
+        &self,
+        method: &str,
+        path: &str,
+    ) -> reqwest::RequestBuilder {
         let url = format!("{}{path}", self.base_url);
         self.http.request(method.parse().unwrap(), &url)
-    }
-
-    // ── internal ─────────────────────────────────────────────────────────
-
-    fn get_or_create(&self, url: &str) -> Arc<Mutex<ResultData>> {
-        let mut map = self.results.lock().unwrap();
-        if let Some(existing) = map.get(url) {
-            return Arc::clone(existing);
-        }
-        let result = Arc::new(Mutex::new(ResultData::new(url.to_string())));
-        map.insert(url.to_string(), Arc::clone(&result));
-        result
     }
 }

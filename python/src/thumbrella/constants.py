@@ -17,6 +17,7 @@ class Status:
     FAILED = "failed"
     OVERLOADED = "overloaded"
     INTERMEDIATE = "intermediate"
+    PLACEHOLDER = "placeholder"  # Server returned a placeholder icon
     UNAVAILABLE = "unavailable"  # Only ever provided by the client
 
 

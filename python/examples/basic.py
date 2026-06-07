@@ -8,7 +8,6 @@ to Thumbrella or accessing the media URL this will fail with an explanation.
 """
 
 import argparse
-import io
 from pathlib import Path
 
 import thumbrella
@@ -23,23 +22,24 @@ def thumbnail(url: str, path: Path):
     if m is None:
         print("Thumbnail did not succeed:", result.status)
 
-    path.write_bytes(m.thumbnail.bytes if m else b"")
+    # Simple result metadata
     print(
         f"{m.kind if m else '?'} {m.file_size if m else '?':,} bytes ->  "
         f"{len(m.thumbnail) if m else 0:,} bytes {path}"
     )
 
+    # Load thumbnail into PIL and process
     try:
         from PIL import Image
-        #img = Image.open(m.thumbnail.io)
-        img = Image.open(io.BytesIO(m.thumbnail.bytes))
+        img = Image.open(m.thumbnail.io)
         print("mode:", img.mode, "width:", img.width, "height:", img.height)
-        exif = img.getexif()
-        print('exif:', exif)
-
-
+        pixel = img.getpixel((img.width // 2, img.height // 2))
+        print("center pixel:", pixel)
     except ImportError:
         print("Pil image library not found")
+
+    # Write image to disk
+    path.write_bytes(m.thumbnail.bytes if m else b"")
 
 
 def main():

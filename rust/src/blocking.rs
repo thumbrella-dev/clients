@@ -1,7 +1,5 @@
 //! Blocking (synchronous) client — gated behind the `blocking` feature.
 
-use std::sync::{Arc, Mutex};
-
 use crate::client::Client as AsyncClient;
 use crate::types::{Error, ResultData};
 
@@ -24,12 +22,16 @@ impl Client {
         self.rt.block_on(self.inner.verify())
     }
 
-    pub fn thumb(&self, url: &str) -> Result<Arc<Mutex<ResultData>>, Error> {
+    pub fn thumb(&self, url: &str) -> Result<ResultData, Error> {
         self.rt.block_on(self.inner.thumb(url))
     }
 
-    pub fn batch(&self, urls: &[&str]) -> Result<Vec<Arc<Mutex<ResultData>>>, Error> {
+    pub fn batch(&self, urls: &[&str]) -> Result<Vec<ResultData>, Error> {
         self.rt.block_on(self.inner.batch(urls))
+    }
+
+    pub fn stream(&self, urls: &[&str]) -> Result<Vec<ResultData>, Error> {
+        self.rt.block_on(self.inner.stream(urls))
     }
 
     pub fn base_url(&self) -> &str {

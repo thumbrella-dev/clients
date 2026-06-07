@@ -7,6 +7,8 @@ export const Status = {
   FAILED: "failed",
   OVERLOADED: "overloaded",
   INTERMEDIATE: "intermediate",
+  /** Server returned a placeholder icon — format not renderable. */
+  PLACEHOLDER: "placeholder",
   /** Client-side only — server was unreachable. */
   UNAVAILABLE: "unavailable",
 } as const;

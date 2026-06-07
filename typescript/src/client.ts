@@ -256,22 +256,21 @@ export class Client {
     checkBackoff(host);
 
     const pending = new Set(stale.map((s) => s.url));
-    const req = this.buildRequest("POST", "/batch", {
-      body: JSON.stringify({ items: stale }),
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/x-ndjson",
-      },
-    });
+    const body = JSON.stringify({ items: stale });
+    const url = `${this.baseUrl}/batch`;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
 
     try {
-      const resp = await fetch(req.url, {
-        method: req.method,
-        headers: req.headers,
-        body: req.body,
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          ...this.headers,
+          "Content-Type": "application/json",
+          Accept: "application/x-ndjson",
+        },
+        body,
         signal: controller.signal,
       });
       clearTimeout(timeoutId);
@@ -299,14 +298,17 @@ export class Client {
           const trimmed = line.trim();
           if (!trimmed) continue;
           try {
-            const item = JSON.parse(trimmed) as Record<string, unknown>;
-            const itemUrl = item.url as string | undefined;
-            if (itemUrl && pending.has(itemUrl)) {
-              if (item.status !== Status.INTERMEDIATE) {
-                pending.delete(itemUrl);
-              }
-              yield resultFromServer(item, this.caches, this.baseUrl);
+            const envelope = JSON.parse(trimmed) as Record<string, unknown>;
+            const kind = envelope.type as string | undefined;
+            const resultData = envelope.result as Record<string, unknown> | undefined;
+            if (!resultData || (kind !== "item.intermediate" && kind !== "item.result")) {
+              continue;
             }
+            const itemUrl = resultData.url as string | undefined;
+            if (itemUrl && kind === "item.result") {
+              pending.delete(itemUrl);
+            }
+            yield resultFromServer(resultData, this.caches, this.baseUrl);
           } catch {
             // skip malformed lines
           }
@@ -314,11 +316,12 @@ export class Client {
       }
       if (buffer.trim()) {
         try {
-          const item = JSON.parse(buffer.trim());
-          const itemUrl = item.url as string | undefined;
-          if (itemUrl && pending.has(itemUrl)) {
-            pending.delete(itemUrl);
-            yield resultFromServer(item, this.caches, this.baseUrl);
+          const envelope = JSON.parse(buffer.trim());
+          const resultData = envelope.result as Record<string, unknown> | undefined;
+          if (resultData && (envelope.type === "item.intermediate" || envelope.type === "item.result")) {
+            const itemUrl = resultData.url as string | undefined;
+            if (itemUrl) pending.delete(itemUrl);
+            yield resultFromServer(resultData, this.caches, this.baseUrl);
           }
         } catch {
           // ignore

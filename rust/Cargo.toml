@@ -23,3 +23,7 @@ blocking = ["reqwest/blocking", "tokio"]
 [[example]]
 name = "basic"
 path = "examples/basic.rs"
+
+[[example]]
+name = "stream"
+path = "examples/stream.rs"

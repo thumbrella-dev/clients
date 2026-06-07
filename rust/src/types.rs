@@ -12,8 +12,10 @@ pub mod status {
     pub const FAILED: &str = "failed";
     pub const OVERLOADED: &str = "overloaded";
     pub const INTERMEDIATE: &str = "intermediate";
+    /// Server returned a placeholder icon — format not renderable.
+    pub const PLACEHOLDER: &str = "placeholder";
     /// Client-side synthetic (server unreachable).
-    pub const CLIENT_ERROR: &str = "client_error";
+    pub const UNAVAILABLE: &str = "unavailable";
 }
 
 // ── source constants ─────────────────────────────────────────────────────
@@ -22,6 +24,10 @@ pub mod source {
     pub const RENDER: &str = "render";
     pub const SHORTCUT: &str = "shortcut";
     pub const CACHE: &str = "cache";
+    /// Client cache hints were valid — no new thumbnail needed.
+    pub const NOT_MODIFIED: &str = "not_modified";
+    /// Server fell back to a placeholder icon.
+    pub const FALLBACK: &str = "fallback";
     /// Client-side synthetic (no network call).
     pub const CLIENT: &str = "client";
 }
@@ -143,50 +149,29 @@ impl std::fmt::Debug for Thumbnail {
     }
 }
 
-// ── Result ───────────────────────────────────────────────────────────────
+// ── Media ────────────────────────────────────────────────────────────────
 
-/// A thumbnail result for one URL.  The same instance is returned for
-/// repeated calls with the same URL (fields updated in-place via the
-/// client's internal identity map).
+/// Stable media identity — reusable, cacheable payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResultData {
+pub struct Media {
     pub url: String,
     #[serde(default)]
-    pub status: String,
+    pub thumbnail: Thumbnail,
     #[serde(default)]
-    pub source_status: Option<u16>,
-    #[serde(default)]
-    pub duration: f64,
-    #[serde(default, rename = "download_size")]
-    pub download_size: u64,
-    #[serde(default)]
-    pub message: Option<String>,
-    #[serde(default)]
-    pub strategy: Option<String>,
-    #[serde(default)]
-    pub placeholder: Option<String>,
-    #[serde(default)]
-    pub mime: Option<String>,
+    pub mime: String,
     #[serde(default, rename = "file_size")]
-    pub file_size: Option<u64>,
+    pub file_size: u64,
     #[serde(default)]
-    pub kind: Option<String>,
+    pub kind: String,
     #[serde(default)]
-    pub extension: Option<String>,
+    pub extension: String,
     #[serde(default)]
     pub properties: serde_json::Value,
     #[serde(default)]
     pub cache: Option<String>,
-    #[serde(default)]
-    pub source: Option<String>,
-    #[serde(default)]
-    pub thumbnail: Thumbnail,
-    /// Raw server JSON (minus thumbnail).
-    #[serde(skip)]
-    pub raw: serde_json::Value,
 }
 
-impl ResultData {
+impl Media {
     pub fn is_fresh(&self) -> bool {
         if let Some(ref cache) = self.cache {
             if let Some((epoch_hex, _)) = cache.split_once(':') {
@@ -201,9 +186,60 @@ impl ResultData {
         }
         false
     }
+}
+
+// ── Result ───────────────────────────────────────────────────────────────
+
+/// A single thumbnail request outcome — process fields + media sub-object.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResultData {
+    pub url: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub duration: f64,
+    #[serde(default, rename = "download_size")]
+    pub download_size: u64,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub placeholder: Option<String>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub media: Option<Media>,
+    /// Raw server JSON.
+    #[serde(skip)]
+    pub raw: serde_json::Value,
+}
+
+impl ResultData {
+    pub fn new(url: String) -> Self {
+        Self {
+            url,
+            status: status::UNAVAILABLE.to_string(),
+            duration: 0.0,
+            download_size: 0,
+            message: None,
+            placeholder: None,
+            source: Some(source::CLIENT.to_string()),
+            media: None,
+            raw: serde_json::Value::Null,
+        }
+    }
+
+    pub fn is_fresh(&self) -> bool {
+        self.media.as_ref().map_or(false, |m| m.is_fresh())
+    }
 
     pub fn is_success(&self) -> bool {
         self.status == status::SUCCESS
+    }
+
+    pub fn set_client_error(&mut self, msg: &str) {
+        self.status = status::UNAVAILABLE.to_string();
+        self.source = Some(source::CLIENT.to_string());
+        self.message = Some(msg.to_string());
     }
 }
 
@@ -219,63 +255,4 @@ pub(crate) struct BatchResponse {
 pub(crate) struct HealthResponse {
     #[serde(default)]
     pub status: String,
-}
-
-impl ResultData {
-    pub(crate) fn new(url: String) -> Self {
-        Self {
-            url,
-            status: status::CLIENT_ERROR.to_string(),
-            source_status: None,
-            duration: 0.0,
-            download_size: 0,
-            message: None,
-            strategy: None,
-            placeholder: None,
-            mime: None,
-            file_size: None,
-            kind: None,
-            extension: None,
-            properties: serde_json::Value::Object(Default::default()),
-            cache: None,
-            source: None,
-            thumbnail: Thumbnail::from(Vec::new()),
-            raw: serde_json::Value::Null,
-        }
-    }
-
-    pub(crate) fn update_from_json(&mut self, raw: serde_json::Value) {
-        self.raw = raw.clone();
-        if let Ok(mut item) = serde_json::from_value::<ResultData>(raw) {
-            // Don't overwrite thumbnail if the server didn't send one.
-            if item.thumbnail.is_empty() && !self.thumbnail.is_empty() {
-                item.thumbnail = self.thumbnail.clone();
-            }
-            *self = item;
-        }
-    }
-
-    pub(crate) fn clone_fields_from(&mut self, other: &Self) {
-        self.status = other.status.clone();
-        self.source_status = other.source_status;
-        self.duration = other.duration;
-        self.download_size = other.download_size;
-        self.message = other.message.clone();
-        self.strategy = other.strategy.clone();
-        self.placeholder = other.placeholder.clone();
-        self.mime = other.mime.clone();
-        self.file_size = other.file_size;
-        self.kind = other.kind.clone();
-        self.extension = other.extension.clone();
-        self.properties = other.properties.clone();
-        self.cache = other.cache.clone();
-        self.source = other.source.clone();
-        self.thumbnail = other.thumbnail.clone();
-        self.raw = other.raw.clone();
-    }
-
-    pub(crate) fn set_client_error(&mut self, msg: &str) {
-        self.status = status::CLIENT_ERROR.to_string();
-        self.message = Some(msg.to_string());
-    }
 }
