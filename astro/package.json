@@ -4,6 +4,11 @@
   "description": "Astro helpers built on top of @thumbrella/client",
   "license": "Apache-2.0",
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./Thumbnail.astro": "./src/Thumbnail.astro",
+    "./Thumbrella.astro": "./src/Thumbrella.astro"
+  },
   "dependencies": {
     "@thumbrella/client": "^0.1.0"
   },

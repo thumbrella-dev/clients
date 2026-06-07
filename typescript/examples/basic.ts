@@ -2,36 +2,26 @@
  * basic.ts - download one thumbnail to a file.
  *
  * Usage:
- *   npm install @thumbrella/client
  *   npx tsx basic.ts https://www.python.org/static/img/python-logo.png thumb.jpg
- *
- * From the repo source, use:  import { Client } from "../src/index.js";
  */
 
 import { writeFileSync } from "node:fs";
-
-import { Client } from "@thumbrella/client";
-
+import { Client } from "../src/index.js";
 
 async function thumbnail(url: string, path: string): Promise<void> {
-  // Client reads TBR_CONNECT env var for server URL or cloud token.
-  // verify() ensures the connection is good before proceeding.
   const tbr = await new Client().verify();
-
-  // thumb() auto-verifies — throws on failure instead of returning
-  // a placeholder like batch() or stream() would.
   const result = await tbr.thumb(url);
 
-  writeFileSync(path, result.thumbnail.bytes);
+  const m = result.media;
+  writeFileSync(path, m?.thumbnail.bytes ?? new Uint8Array(0));
   console.log(
-    `${result.kind}  ` +
-      `${result.fileSize?.toLocaleString() ?? "?"} bytes  ->  ` +
-      `${result.thumbnail.length.toLocaleString()} bytes  ` +
+    `${m?.kind ?? "?"}  ` +
+      `${m?.fileSize?.toLocaleString() ?? "?"} bytes  ->  ` +
+      `${m?.thumbnail.length.toLocaleString() ?? "0"} bytes  ` +
       `(${result.source ?? "render"})  ` +
       `${path}`,
   );
 }
-
 
 async function main(): Promise<void> {
   const [url, path] = process.argv.slice(2);
@@ -41,7 +31,6 @@ async function main(): Promise<void> {
   }
   await thumbnail(url, path);
 }
-
 
 main().catch((err) => {
   console.error(err.message);

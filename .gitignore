@@ -5,16 +5,13 @@ Thumbs.db
 .env.*
 .dev.env
 
-# Node / TypeScript
 node_modules/
 dist/
 *.tsbuildinfo
-
-# Python
 __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
-
-# Go
 bin/
+target/
+.astro/

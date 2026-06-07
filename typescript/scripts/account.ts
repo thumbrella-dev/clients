@@ -20,20 +20,10 @@ function resolveConnectionString(): string {
     return legacyConnection;
   }
 
-  const server = process.env.TBR_SERVER?.trim();
-  const key = process.env.TBR_API_KEY?.trim();
-  if (server && key) {
-    return `${server},${key}`;
-  }
-  if (server) {
-    return server;
-  }
-
   throw new Error([
     'No connection configuration found.',
     'Set one of these in .dev.env:',
     '  TBR_CONNECT=<api_key | http://host | https://host,api_key>',
-    '  or TBR_SERVER (+ optional TBR_API_KEY)',
   ].join('\n'));
 }
 

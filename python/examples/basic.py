@@ -3,34 +3,43 @@
 Usage:
     python basic.py https://www.python.org/static/img/python-logo.png thumb.jpeg
 
-Gets a generated thumbnail for any url. If there any problems connecting to
-Thumbrella or accessing the media url this will fail with a simple explanation.
-
+Gets a generated thumbnail for any URL. If there are problems connecting
+to Thumbrella or accessing the media URL this will fail with an explanation.
 """
 
 import argparse
-import sys
+import io
 from pathlib import Path
 
 import thumbrella
 
 
 def thumbnail(url: str, path: Path):
-    """Generate thumbnail for url and save disk"""
-    # Client reads TBR_CONNECT env var for server URL or cloud token.
-    # Verify ensures our connection is good instead of falling back on 
-    # bad placeholders when the server is not succeeding.
+    """Generate thumbnail for url and save to disk."""
     tbr = thumbrella.Client().verify()
-
-    # The thumb will fail if there was a problem handing the media,
-    # unlike other calls like batch() or stream() which provide placeholders.
     result = tbr.thumb(url)
 
-    path.write_bytes(result.thumbnail.bytes)
+    m = result.media
+    if m is None:
+        print("Thumbnail did not succeed:", result.status)
+
+    path.write_bytes(m.thumbnail.bytes if m else b"")
     print(
-        f"{result.kind} {result.file_size or '?':,} bytes ->  "
-        f"{len(result.thumbnail.bytes):,} bytes {path}"
+        f"{m.kind if m else '?'} {m.file_size if m else '?':,} bytes ->  "
+        f"{len(m.thumbnail) if m else 0:,} bytes {path}"
     )
+
+    try:
+        from PIL import Image
+        #img = Image.open(m.thumbnail.io)
+        img = Image.open(io.BytesIO(m.thumbnail.bytes))
+        print("mode:", img.mode, "width:", img.width, "height:", img.height)
+        exif = img.getexif()
+        print('exif:', exif)
+
+
+    except ImportError:
+        print("Pil image library not found")
 
 
 def main():

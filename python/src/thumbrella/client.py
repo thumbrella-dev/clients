@@ -2,88 +2,61 @@
 
 from __future__ import annotations
 
-import os
+import json
 import time
-import weakref
+from importlib.metadata import version as _package_version
 from typing import Any, AsyncIterator, Sequence
 from urllib.parse import urlparse
 
 import requests
 
-from .cache import Cache, MemoryCache
+from .cache import Cache, MemoryCache, put_all_caches
+from .constants import DEFAULT_BASE, Source, Status
 from .errors import ConnectionError, TimeoutError, VerifyError
-from .result import Result
-
-
-# Default base URL when none is configured.
-_DEFAULT_BASE = "http://api.thumbrella.dev/"
-
-# Backoff ceiling for 429/503 responses (seconds).
-_MAX_BACKOFF = 60.0
+from .result import EncodedJpeg, Media, Result
+from .http import parse_connect, requests_json, aio_ndjson
 
 
 class Client:
     """Thumbrella API client.
 
-    All ``thumb()`` calls for the same URL return the same ``Result`` instance
-    (fields updated in-place on re-fetch).  Results are weakly referenced —
-    they live as long as your code holds a reference.
+    All ``thumb()`` calls for the same URL return the same ``Result``
+    instance (fields updated in-place on re-fetch). Results are weakly
+    referenced -- they live as long as your code holds a reference.
 
-    By default, an in-memory :class:`MemoryCache` is enabled.  Pass
+    By default, a small in-memory :class:`MemoryCache` is enabled. Pass
     ``caches=[]`` to disable caching entirely.
+
+    The ``session`` attribute is a :class:`requests.Session` that you can
+    customize for proxies, TLS certificates, custom timeouts, cookies, or
+    any other transport-level tuning. Not needed for normal use.
+
+    Args:
+        connect: Optional connection string that overrides ``$TBR_CONNECT``.
+        caches: One or more :class:`Cache` backends. ``None`` (the
+            default) creates a :class:`MemoryCache` with 256 entries.
+            Pass an empty sequence to disable caching.
+
     """
 
     def __init__(
         self,
         connect: str | None = None,
         *,
-        timeout: float = 30.0,
         caches: Sequence[Cache] | None = None,
     ) -> None:
-        """Create a client.
+        self.session: requests.Session = requests.Session()
+        self._asession: Any = None  # lazy aiohttp.ClientSession
+        self.base_url, self.host_name = parse_connect(connect, self.session)
+        self.session.headers["User-Agent"] = _client_user_agent()
 
-        Args:
-            connect: Connection string in one of these forms:
-                - ``"tbr_s_XXXX"`` — bearer token for cloud platform
-                - ``"http://host:port"`` — bare server URL
-                - ``"http://host:port#HANDSHAKECODE"`` — URL with handshake
-                  (bare fragment without ``tbr_`` prefix)
-                - ``"http://host:port#tbr_s_XXXX"`` — staging URL with
-                  bearer token (bare fragment starting with ``tbr_``)
-                - ``"http://host:port#Key=val&Key2=val2"`` — URL with custom
-                  headers
-                - ``None`` — read ``TBR_CONNECT`` env var, then ``TBR_SERVER``,
-                  then the default.
-            timeout: Request timeout in seconds.
-            caches: One or more :class:`Cache` backends.  ``None`` (the default)
-                creates a :class:`MemoryCache` with 256 entries.  Pass an empty
-                sequence to disable caching.
-        """
-        self._base_url, connect_headers = _parse_connect(connect)
-        self._server_key = self._base_url
-        self._timeout = timeout
-        self._session = requests.Session()
-        self._session.headers["User-Agent"] = "thumbrella-client/0.1"
-        for key, value in connect_headers.items():
-            self._session.headers[key] = value
-
-        # Caches — checked in order on every request.
         if caches is None:
-            self._caches: list[Cache] = [MemoryCache()]
+            self.caches: tuple[Cache, ...] = (MemoryCache(), )
         else:
-            self._caches = list(caches)
-
-        # Weak dict: URL → Result.  Callers holding a reference keep the
-        # Result alive; when all references drop, it's garbage-collected.
-        self._results: weakref.WeakValueDictionary[str, Result] = (
-            weakref.WeakValueDictionary()
-        )
-
-        # Per-host backoff state: (backoff_until, consecutive_failures).
-        self._backoff: dict[str, tuple[float, int]] = {}
+            self.caches = tuple(caches)
 
     def __repr__(self) -> str:
-        return f"<thumbrella.Client {self._base_url!r}>" 
+        return f"<thumbrella.Client {self.base_url!r}>"
 
     def __eq__(self, other: object) -> bool:
         return self is other
@@ -94,10 +67,8 @@ class Client:
     def __hash__(self) -> int:
         return object.__hash__(self)
 
-    # ── public API ────────────────────────────────────────────────────────
-
     def verify(self) -> Client:
-        """Check connectivity.  Returns ``self`` for chaining.
+        """Check connectivity. Returns ``self`` for chaining.
 
         Uses ``/health`` for self-hosted servers and ``/token`` for the
         cloud platform (which validates the bearer token).
@@ -105,332 +76,260 @@ class Client:
         Raises:
             VerifyError: if the server is unreachable or misconfigured.
         """
-        path = "/token" if self._base_url == _DEFAULT_BASE else "/health"
+        if self.base_url == DEFAULT_BASE:
+            path = "/token"
+            key = "token_type"
+        else:
+            path = "/health"
+            key = "status"
+
         try:
-            resp = self.request("GET", path)
-            resp.raise_for_status()
-            data = resp.json()
+            data = requests_json(
+                self.session, self.host_name, self.base_url, "GET", path
+            )
         except (ConnectionError, TimeoutError) as exc:
             raise VerifyError(
-                f"could not reach server at {self._base_url}"
+                f"could not reach server at {self.base_url}"
             ) from exc
         except requests.RequestException as exc:
             raise VerifyError(
-                f"server at {self._base_url}: {exc}"
+                f"server at {self.base_url}: {exc}"
             ) from exc
 
-        if data.get("status") != "ok":
+        if not data.get(key):
             raise VerifyError(f"unexpected response: {data}")
         return self
 
     def thumb(self, url: str) -> Result:
-        """Fetch a thumbnail for a single URL.  Raises on failure.
+        """Fetch a thumbnail for a single URL. Raises on failure.
 
-        Delegates to :meth:`batch` and auto-verifies the result.  The
+        Delegates to :meth:`batch` and auto-verifies the result. The
         same ``Result`` instance is returned for repeated calls with the
         same URL (fields updated in-place).
 
         Raises:
             ThumbError: if the server returned an error for this URL.
         """
-        return self.batch([url])[0].verify()
+        return self.batch((url, ))[0].verify()
 
-    def batch(self, urls: list[str]) -> list[Result]:
+    def batch(self, urls: Sequence[str]) -> list[Result]:
         """Fetch thumbnails for multiple URLs in one request.
 
-        Returns a list of ``Result`` objects in the same order.
-
-        Checks caches first — fresh URLs are not sent to the server.
+        Returns a list of ``Result`` objects in the same order as *urls*.
+        Fresh cache entries and invalid URLs are resolved locally; the
+        remainder go to the server in a single ``POST /batch``.
         """
-        results = [self._get_or_create_result(u) for u in urls]
+        done, stale = preflight_urls(urls, self.caches)
 
-        # Check caches and gather cache tokens for fresh entries.
-        items = []
-        fetch_indices: list[int] = []
-        for i, r in enumerate(results):
-            for cache in self._caches:
-                cached = cache.get(r.url)
-                if cached is not None and cached is not r:
-                    r._update_from_result(cached)
-            if r.is_fresh():
-                r.source = "client"
-                continue
-            fetch_indices.append(i)
-            item: dict[str, str] = {"url": r.url}
-            if r.cache:
-                item["cache"] = r.cache
-            items.append(item)
+        if stale:
+            try:
+                body = requests_json(
+                    self.session, self.host_name, self.base_url, "POST", "/batch",
+                    json={"items": stale},
+                )
+            except (ConnectionError, TimeoutError) as exc:
+                return _fail_all(done, stale, urls, str(exc))
 
-        if not items:
-            return results  # all fresh from cache
+            items = body.get("items")
+            if not isinstance(items, list):
+                return _fail_all(done, stale, urls, "unexpected server response")
 
-        try:
-            resp = self.request(
-                "POST",
-                "/batch",
-                json={"items": items},
-            )
-        except (ConnectionError, TimeoutError):
-            for i in fetch_indices:
-                results[i]._set_client_error("server unreachable")
-            return results
+            for item in items:
+                result = _result_from_server(item, caches=self.caches, server_key=self.base_url)
+                done[result.url] = result
 
-        if not resp.ok:
-            for r in results:
-                r._set_client_error(f"server returned {resp.status_code}")
-            return results
+        return _ordered_results(done, urls)
 
-        try:
-            body = resp.json()
-        except ValueError:
-            for r in results:
-                r._set_client_error(f"invalid JSON from server ({resp.status_code})")
-            return results
-
-        for r, item in zip(results, body.get("items", [])):
-            r._update_from_json(item)
-            self._cache_put(r)
-        return results
-
-    async def stream(self, urls: list[str]) -> AsyncIterator[Result]:
+    async def stream(self, urls: Sequence[str]) -> AsyncIterator[Result]:
         """Stream thumbnail results as they complete.
 
-        Requires ``aiohttp``.
+        Requires ``aiohttp`` (``pip install thumbrella-client[async]``).
+
+        Fresh cache hits are yielded immediately.  The remainder are sent
+        to the server as a streaming batch; each result is yielded as it
+        arrives via NDJSON.
         """
+        # Handle fresh urls immediately
+        done, stale = preflight_urls(urls, self.caches)
+        for url in urls:
+            if url in done:
+                yield done[url]
+        if not stale:
+            return
+
+        pending: set[str] = {item["url"] for item in stale}
+        #headers = {self.session.headers, "Accept": "application/x-ndjson"}
+        #url = f"{self.base_url}/batch"
+
         import aiohttp
+        if self._asession is None:
+            self._asession = aiohttp.ClientSession()
 
-        results = [self._get_or_create_result(u) for u in urls]
-        url_map = {r.url: r for r in results}
-
-        items = [
-            {"url": url}
-            if not (r.cache and r.is_fresh())
-            else {"url": url, "cache": r.cache}
-            for url, r in zip(urls, results)
-        ]
-
-        req = self.build_request(
-            "POST", "/batch",
-            json={"items": items},
-            headers={"Accept": "application/x-ndjson"},
-        )
-
-        timeout = aiohttp.ClientTimeout(total=self._timeout)
-        stream_urls = {item["url"] for item in items}
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(
-                    req.url,
-                    json=req.json,
-                    headers=req.headers,
-                ) as resp:
-                    resp.raise_for_status()
-                    async for raw_line in resp.content:
-                        line = raw_line.decode("utf-8").strip()
-                        if not line:
-                            continue
-
-                        import json
-
-                        try:
-                            event = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-
-                        if event.get("type") == "item.result":
-                            item = event.get("result", {})
-                            url = item.get("url", "")
-                            if url in url_map:
-                                result = url_map[url]
-                                # Don't cache intermediate results — the
-                                # real result arrives later in the stream.
-                                if item.get("status") != "intermediate":
-                                    result._update_from_json(item)
-                                    self._cache_put(result)
-                                yield result
-                        elif event.get("type") == "item.error":
-                            url = event.get("url", "")
-                            if url in url_map:
-                                url_map[url]._set_client_error(
-                                    event.get("error", "stream error")
-                                )
-                                yield url_map[url]
+            async for item in aio_ndjson(
+                self._asession, self.host_name, self.base_url, "/batch",
+                json={"items": stale}, headers={"Accept": "application/x-ndjson"},
+            ):
+                item_url = item.get("url", "")
+                if item.get("status") != Status.INTERMEDIATE:
+                    pending.discard(item_url)
+                result = _result_from_server(
+                    item, caches=self.caches, server_key=self.base_url
+                )
+                yield result
         except Exception:
-            for url in stream_urls:
-                if url in url_map:
-                    url_map[url]._set_client_error("stream connection lost")
-                    yield url_map[url]
+            pass
 
-    @property
-    def base_url(self) -> str:
-        """The server base URL this client is connected to."""
-        return self._base_url
+        for item_url in pending:
+            yield Result.client_fail(item_url, "stream connection lost")
 
-    @property
-    def caches(self) -> tuple[Cache, ...]:
-        """Registered cache backends (read-only)."""
-        return tuple(self._caches)
 
     def clear_caches(self) -> None:
         """Remove all entries from all registered caches."""
-        for cache in self._caches:
+        for cache in self.caches:
             cache.clear()
 
-    # ── internal ──────────────────────────────────────────────────────────
-
-    def _cache_put(self, result: Result) -> None:
-        """Store *result* in all registered caches."""
-        for cache in self._caches:
-            cache.put(result)
-
-    def _get_or_create_result(self, url: str) -> Result:
-        """Get existing Result for *url* or create a new one."""
-        try:
-            return self._results[url]
-        except KeyError:
-            result = Result(url, _server_key=self._server_key)
-            self._results[url] = result
-            return result
-
-    def build_request(
-        self,
-        method: str,
-        path: str,
-        *,
-        headers: dict[str, str] | None = None,
-        **kwargs: Any,
-    ) -> requests.Request:
-        """Build a :class:`requests.Request` without executing it.
-
-        The request carries the full URL, session handshake headers, and
-        any per-call overrides.  You can inspect it, modify it, or pass it
-        to :meth:`_execute` (sync) or extract its fields for use with
-        ``aiohttp`` / ``httpx`` (async).
-
-        Args:
-            method: HTTP method (``\"GET\"``, ``\"POST\"``, etc.).
-            path: Server path (e.g. ``\"/thumb.jpeg\"``, ``\"/batch\"``).
-            headers: Extra headers merged with session defaults.
-            **kwargs: Passed to ``requests.Request`` (``params``, ``json``,
-                ``data``, etc.).
-        """
-        url = f"{self._base_url}{path}"
-        req_headers = dict(self._session.headers)
-        if headers:
-            req_headers.update(headers)
-        return requests.Request(method, url, headers=req_headers, **kwargs)
-
-    def _execute(self, req: requests.Request) -> requests.Response:
-        """Prepare and send *req* with per-host backoff for 429/503."""
-        prepared = self._session.prepare_request(req)
-        host = urlparse(prepared.url).hostname or ""
-        backoff_until, failures = self._backoff.get(host, (0, 0))
-
-        if time.monotonic() < backoff_until:
-            wait = backoff_until - time.monotonic()
-            time.sleep(wait)
-
-        try:
-            resp = self._session.send(prepared, timeout=self._timeout)
-        except requests.Timeout as exc:
-            raise TimeoutError(f"request to {host} timed out") from exc
-        except requests.ConnectionError as exc:
-            raise ConnectionError(f"could not connect to {host}: {exc}") from exc
-
-        if resp.status_code in (429, 503):
-            failures += 1
-            delay = min(2 ** failures, _MAX_BACKOFF)
-            self._backoff[host] = (time.monotonic() + delay, failures)
-        elif resp.ok:
-            self._backoff.pop(host, None)
-
-        return resp
-
-    def request(
-        self,
-        method: str,
-        path: str,
-        *,
-        headers: dict[str, str] | None = None,
-        **kwargs: Any,
-    ) -> requests.Response:
-        """Low-level HTTP request — build + execute in one call.
-
-        Prefer :meth:`thumb` or :meth:`batch` for normal use.  For async
-        use, call :meth:`build_request` and extract fields for your async
-        HTTP library.
-
-        Args:
-            method: HTTP method (``\"GET\"``, ``\"POST\"``, etc.).
-            path: Server path (e.g. ``\"/thumb.jpeg\"``, ``\"/batch\"``).
-            headers: Extra headers merged with session defaults.
-            **kwargs: Passed to ``requests.Request`` (``params``, ``json``,
-                ``data``, etc.).
-        """
-        return self._execute(
-            self.build_request(method, path, headers=headers, **kwargs)
-        )
+    async def close(self) -> None:
+        """Close persistent sessions.  Safe to call multiple times."""
+        if self._asession is not None:
+            await self._asession.close()
+            self._asession = None
 
 
-# ── connect string parsing ────────────────────────────────────────────────
+def _client_user_agent() -> str:
+    """Build a User-Agent string from the installed package version."""
+    try:
+        ver = _package_version("thumbrella-client")
+    except Exception:
+        ver = "0.1.0"
+    return f"thumbrella-python/{ver}"
 
-# Fragment segment without '=' is shorthand for this header.
-_HANDSHAKE_HEADER = "x-tbr-handshake"
+
+# Per-server placeholder thumbnail cache — permanent, keyed by connect string.
+_PLACEHOLDER_CACHE: dict[str, dict[str, EncodedJpeg]] = {}
 
 
-def _parse_connect(
-    connect: str | None,
-) -> tuple[str, dict[str, str]]:
-    """Parse a connect string into (base_url, extra_headers).
+def _result_from_server(
+    item: dict[str, Any],
+    *,
+    caches: Sequence[Cache],
+    server_key: str,
+) -> Result:
+    """Build a :class:`Result` from a server response item, with identity sharing.
 
-    Formats
-    -------
-    ``tbr_X_XXXX``
-        Bearer token for the cloud platform.  Sets ``Authorization: Bearer``.
-        Uses the default cloud API base URL.
-    ``http://host:port``
-        Bare server URL, no auth.
-    ``http://host:port#HANDSHAKECODE``
-        Shorthand: bare fragment without ``tbr_`` prefix sets the
-        ``x-tbr-handshake`` header.
-    ``http://host:port#tbr_s_XXXX``
-        Bare fragment starting with ``tbr_`` is a bearer token — use
-        this for staging servers that need both a custom URL and auth.
-    ``http://host:port#x-tbr-handshake=CODE``
-        Explicit handshake header.
-    ``http://host:port#Modal-Key=wk-xxx&Modal-Secret=ws-yyy``
-        Arbitrary custom headers (platform-level auth, etc.).
-    ``None``
-        Reads ``TBR_CONNECT`` env var, then ``TBR_SERVER``, then the default.
+    - ``not_modified`` responses reuse cached :class:`Media` (same instance).
+    - Placeholder thumbnails share :class:`EncodedJpeg` blobs across results.
+    - Normal results construct fresh objects.
+
+    On success the result's media is stored in all *caches*.
     """
-    if connect is None:
-        connect = os.environ.get("TBR_CONNECT") or os.environ.get(
-            "TBR_SERVER"
-        ) or _DEFAULT_BASE
+    url = item.get("url", "")
+    source = item.get("source")
+    placeholder = item.get("placeholder")
 
-    # Bearer token (no scheme, no host:port pattern).
-    if "://" not in connect:
-        return _DEFAULT_BASE, {"Authorization": f"Bearer {connect}"}
+    if source == Source.NOT_MODIFIED:
+        media = _media_from_caches(url, caches)
+        result = Result(item, media=media) if media else Result(item)
+    elif placeholder:
+        thumb_b64 = item.get("media", {}).get("thumbnail", "")
+        thumb = _placeholder_thumb(server_key, placeholder, thumb_b64)
+        result = Result(item, thumbnail=thumb)
+    else:
+        result = Result(item)
 
-    # URL with optional fragment headers.
-    parsed = urlparse(connect)
-    base = f"{parsed.scheme}://{parsed.netloc}"
-    headers: dict[str, str] = {}
+    put_all_caches(caches, result.media)
+    return result
 
-    if parsed.fragment:
-        for seg in parsed.fragment.split("&"):
-            seg = seg.strip()
-            if not seg:
-                continue
-            if "=" in seg:
-                key, _, value = seg.partition("=")
-                headers[key.strip()] = value.strip()
-            else:
-                # Bare segment — shorthand.  tbr_ prefix = bearer token,
-                # anything else = handshake header.
-                if seg.startswith("tbr_"):
-                    headers["Authorization"] = f"Bearer {seg}"
-                else:
-                    headers[_HANDSHAKE_HEADER] = seg
 
-    return base, headers
+def _media_from_caches(url: str, caches: Sequence[Cache]) -> Media | None:
+    """Return cached Media for *url*, or ``None``."""
+    for cache in caches:
+        media = cache.get(url)
+        if media is not None:
+            return media
+    return None
+
+
+def _placeholder_thumb(server_key: str, placeholder: str, b64: str) -> EncodedJpeg:
+    """Get or create a shared EncodedJpeg for a placeholder icon."""
+    pool = _PLACEHOLDER_CACHE.setdefault(server_key, {})
+    shared = pool.get(placeholder)
+    if shared is not None:
+        return shared
+    blob = EncodedJpeg(b64=b64)
+    pool[placeholder] = blob
+    return blob
+
+
+def _fail_all(
+    done: dict[str, Result],
+    items: Sequence[dict[str, str]],
+    urls: Sequence[str],
+    message: str,
+) -> list[Result]:
+    """Mark *items* as failed and return ordered Results for *urls*."""
+    for item in items:
+        url = item["url"]
+        done[url] = Result.client_fail(url, message)
+    return _ordered_results(done, urls)
+
+
+def _ordered_results(
+    done: dict[str, Result],
+    urls: Sequence[str],
+) -> list[Result]:
+    """Return Results in *urls* order, filling gaps with client-fail Results."""
+    results: list[Result] = []
+    for url in urls:
+        result = done.get(url)
+        if result is None:
+            result = Result.client_fail(url, "internal error: no result")
+        results.append(result)
+    return results
+
+
+def preflight_urls(
+    urls: Sequence[str],
+    caches: Sequence[Cache],
+) -> tuple[dict[str, Result], list[dict[str, str]]]:
+    """Check caches and validate URLs.
+
+    Returns ``(done, stale)`` where *done* maps url → Result for items
+    resolved without a server call, and *stale* is a list of
+    ``{"url": ..., "cache": ...}`` dicts to send to the server.
+    """
+    done: dict[str, Result] = {}
+    stale: list[dict[str, str]] = []
+
+    for url in urls:
+        # Basic URL validation — must have a scheme.
+        if not url or "://" not in url:
+            done[url] = Result.client_fail(url, "invalid URL")
+            continue
+
+        # Check all caches for a fresh entry.
+        fresh = False
+        for cache in caches:
+            media = cache.get(url)
+            if media is not None and media.is_fresh():
+                data = {"url": url, "status": Status.SUCCESS, "source": Source.CLIENT}
+                done[url] = Result(data, media=media)
+                fresh = True
+                break
+
+        if fresh:
+            continue
+
+        # Stale — build the server request.  Include the cache token
+        # from any cached media so the server can do a conditional revalidation.
+        item: dict[str, str] = {"url": url}
+        for cache in caches:
+            media = cache.get(url)
+            if media is not None and media.cache:
+                item["cache"] = media.cache
+                break
+        stale.append(item)
+
+    return done, stale
+
+

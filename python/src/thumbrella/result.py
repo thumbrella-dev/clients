@@ -1,89 +1,161 @@
-"""Result object — identity-stable, with shared thumbnail data."""
+"""Result and Media objects"""
 
 from __future__ import annotations
 
 import base64
-import io as _io
-import time
-import weakref
+import io
+import os
+import pkgutil
 from typing import Any
 
-from ._placeholders import FAILED as _FAILED_PLACEHOLDER
-from .constants import Status
+from .constants import Source, Status, FileKind
+from .cache import is_cache_fresh
 
 
-class _BytesReader:
-    """Zero-copy read-only binary IO wrapping a bytes object."""
+class Result:
+    """A single thumbnail request outcome — process fields + stable media.
 
-    def __init__(self, data: bytes) -> None:
-        self._data = data
-        self._pos = 0
+    Each ``Result`` is unique per request invocation.  The ``media``
+    attribute is the stable, reusable payload — two results for the same
+    file share the same ``Media`` instance.
 
-    def read(self, n: int = -1) -> bytes:
-        if n < 0:
-            chunk = self._data[self._pos :]
-            self._pos = len(self._data)
+    Top-level fields describe *this invocation* (status, timing, source).
+    The ``media`` sub-object holds the thumbnail, metadata, and cache token.
+
+    On failure, ``media`` is ``None`` and ``message`` explains why.
+    """
+    __slots__ = (
+        "url", "status", "message", "source", "duration", "download_size", 
+        "placeholder", "media", "raw", "__weakref__",    
+    )
+
+    def __init__(
+        self,
+        data: dict[str, Any], 
+        *,
+        media: Media | None = None,
+        thumbnail: EncodedJpeg | None = None,
+    ) -> None:
+        assert not (media and thumbnail), "cannot override media and override thumbnail on result"
+        self.url: str = data.get("url", "")
+        self.status: str = data.get("status", Status.UNAVAILABLE)
+        self.message: str | None = data.get("message")
+        self.source: str | None = data.get("source", Source.CLIENT)
+        self.duration: float = float(data.get("duration", 0.0))
+        self.download_size: int = int(data.get("download_size", 0))
+        self.placeholder: str | None = data.get("placeholder")
+        self.media: Media | None = media
+        self.raw: dict[str, Any] = data
+        if not media:
+            media_data = data.get("media")
+            if media_data is not None:
+                media_data = dict(media_data)
+                media_data.setdefault("url", self.url)
+            else:
+                media_data = {"url": self.url}
+            self.media = Media(media_data, thumbnail=thumbnail)
+
+    @classmethod
+    def client_fail(
+        cls,
+        url: str,
+        message: str,
+    ) -> Result:
+        """Build result from client side failure, or unresponsive server."""
+        data = {"url": url, "status": Status.FAILED, "source": Source.CLIENT, "message": message}
+        return Result(data, thumbnail=_failed_thumbnail())
+
+    def __repr__(self) -> str:
+        return f"<thumbrella.Result {self.status} {self.url!r}>"
+
+    def verify(self) -> Result:
+        """Check this result is usable.  Returns ``self`` for chaining.
+
+        Raises :class:`ThumbError` on failure.  Symmetric with
+        :meth:`Client.verify`.
+        """
+        from .errors import ThumbError
+
+        if self.status in (Status.SUCCESS, Status.INTERMEDIATE):
+            return self
+        raise ThumbError(
+            f"thumbnail failed for {self.url}: {self.status}"
+            + (f" - {self.message}" if self.message else "")
+        )
+
+
+class Media:
+    """Stable media identity — reusable, cacheable, hashable by content.
+
+    Two ``Media`` instances with identical content compare equal and hash
+    the same.  Use as dict keys for client-side image caches.
+
+    The ``thumbnail`` is an :class:`EncodedJpeg` blob.  Placeholder
+    thumbnails are shared across results via a per-server pool.
+    """
+
+    __slots__ = ("url", "thumbnail", "mime", "file_size", "kind",
+                 "extension", "properties", "cache", "__weakref__")
+
+    def __init__(
+        self,
+        data: dict[str, Any], 
+        *,
+        thumbnail: EncodedJpeg | None = None,
+    ) -> None:
+        self.url: str = data.get("url", "")
+        self.cache: str = data.get("cache", "")
+        self.file_size: int = data.get("file_size", 0)
+        self.kind: str = data.get("kind", FileKind.UNKNOWN)
+        self.extension: str = data.get("extension", "")
+        self.mime: str = data.get("mime", "application/octet-stream")
+        self.properties: dict[str, int | float] = data.get("properties", {})
+        if thumbnail:
+            self.thumbnail: EncodedJpeg = thumbnail
         else:
-            chunk = self._data[self._pos : self._pos + n]
-            self._pos += len(chunk)
-        return chunk
+            thumb_data = data.get('thumbnail')
+            if thumb_data:
+                self.thumbnail: EncodedJpeg = EncodedJpeg(b64=thumb_data)
+            else:
+                self.thumbnail = _failed_thumbnail()
 
-    def readinto(self, buf: bytearray | memoryview) -> int:
-        n = min(len(buf), len(self._data) - self._pos)
-        buf[:n] = self._data[self._pos : self._pos + n]
-        self._pos += n
-        return n
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, Media):
+            return self is other
+        return NotImplemented
 
-    def seek(self, offset: int, whence: int = 0) -> int:
-        if whence == 0:
-            self._pos = max(0, min(offset, len(self._data)))
-        elif whence == 1:
-            self._pos = max(0, min(self._pos + offset, len(self._data)))
-        elif whence == 2:
-            self._pos = max(0, min(len(self._data) + offset, len(self._data)))
-        else:
-            raise ValueError(f"invalid whence: {whence}")
-        return self._pos
+    def __ne__(self, other: object) -> bool:
+        if isinstance(other, Media):
+            return self is not other
+        return NotImplemented
 
-    def tell(self) -> int:
-        return self._pos
+    def __hash__(self) -> int:
+        return id(self)
 
-    def readable(self) -> bool:
-        return True
+    def __repr__(self) -> str:
+        n = len(self.thumbnail) if (self.thumbnail is not None) else 0
+        return f"<thumbrella.Media {self.kind or '?'} {self.url!r} thumb={n}B>"
 
-    def writable(self) -> bool:
-        return False
+    def is_fresh(self) -> bool:
+        """Check if the cached result is still fresh.
 
-    def seekable(self) -> bool:
-        return True
-
-    def write(self, _data: bytes) -> int:
-        raise _io.UnsupportedOperation("write")
-
-    def truncate(self, _size: int | None = None) -> int:
-        raise _io.UnsupportedOperation("truncate")
-
-    def close(self) -> None:
-        pass
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args: object) -> None:
-        pass
+        Delegates to ``media.cache``.  Returns ``False`` when no cache
+        data is available (always stale).
+        """
+        return is_cache_fresh(self.cache)
 
 
-class _JpegBlob:
+class EncodedJpeg:
     """Lazy-decoded JPEG thumbnail data, hashable by content.
 
-    Used as the value of ``Result.thumbnail``.  Two blobs with identical
-    bytes compare equal and hash the same, so ``result.thumbnail`` can be
+    Used as the value of ``Media.thumbnail``.  Two blobs with identical
+    bytes compare equal and hash the same, so ``media.thumbnail`` can be
     used directly as a dict key for client-side image caches::
 
         img_cache = {}
-        img = img_cache.get(result.thumbnail)
+        img = img_cache.get(result.media.thumbnail)
         if img is None:
-            img = img_cache[result.thumbnail] = load_jpeg(result.thumbnail.io)
+            img = img_cache[result.media.thumbnail] = load_jpeg(result.media.thumbnail.io)
     """
 
     __slots__ = ("_b64", "_data", "_hash", "__weakref__")
@@ -98,18 +170,6 @@ class _JpegBlob:
         self._data = data
         self._hash: int | None = None
 
-    # -- constructors ---------------------------------------------------
-
-    @classmethod
-    def from_wire(cls, thumb: Any) -> _JpegBlob:
-        if isinstance(thumb, str) and thumb:
-            return cls(b64=thumb)
-        if isinstance(thumb, bytes):
-            return cls(data=thumb)
-        return cls(data=b"")
-
-    # -- content access -------------------------------------------------
-
     @property
     def bytes(self) -> bytes:
         """The raw JPEG payload (base64-decoded lazily on first access)."""
@@ -118,20 +178,13 @@ class _JpegBlob:
                 self._data = base64.b64decode(self._b64)
             else:
                 self._data = b""
-            self._b64 = None  # drop encoded form
+            self._b64 = None
         return self._data
 
     @property
-    def io(self) -> _BytesReader:
+    def io(self) -> "_BytesReader":
         """Fresh zero-copy read-only binary stream of the JPEG data."""
         return _BytesReader(self.bytes)
-
-    # -- identity (hashable / equatable by content) ---------------------
-
-    def __hash__(self) -> int:
-        if self._hash is None:
-            self._hash = hash(self.bytes)
-        return self._hash
 
     @property
     def key(self) -> int:
@@ -142,8 +195,13 @@ class _JpegBlob:
         """
         return hash(self)
 
+    def __hash__(self) -> int:
+        if self._hash is None:
+            self._hash = hash(self.bytes)
+        return self._hash
+
     def __eq__(self, other: object) -> bool:
-        if isinstance(other, _JpegBlob):
+        if isinstance(other, EncodedJpeg):
             return self.bytes == other.bytes
         return NotImplemented
 
@@ -156,210 +214,109 @@ class _JpegBlob:
     def __bytes__(self) -> bytes:
         return self.bytes
 
-    def __repr__(self) -> str:
-        n = len(self.bytes)
-        return f"<thumbrella.Jpeg bytes={n}>" if n else "<thumbrella.Jpeg bytes=0>"
-
-
-# Per-server placeholder sharing pool.
-_PLACEHOLDER_POOL: weakref.WeakValueDictionary[str, _JpegBlob] = (
-    weakref.WeakValueDictionary()
-)
-
-
-class Result:
-    """A thumbnail result for one URL.
-
-    Result objects are identity-stable: requesting the same URL from the same
-    ``Client`` returns the same Python object (fields updated in-place).  This
-    means you can hold a reference across multiple fetches and always see the
-    latest data.
-
-    Equality compares both source and rendered output fields.
-
-    ``Result`` is mutable (values update in-place), so it is intentionally
-    unhashable.
-    """
-
-    def __init__(
-        self,
-        url: str,
-        *,
-        _server_key: str = "",
-    ) -> None:
-        self.url = url
-        self._server_key = _server_key
-        self.status: str = Status.CLIENT_ERROR
-        self.source_status: int | None = None
-        self.duration: float = 0.0
-        self.download_size: int = 0
-        self.message: str | None = None
-        self.strategy: str | None = None
-        self.placeholder: str | None = None
-        self.mime: str | None = None
-        self.file_size: int | None = None
-        self.kind: str | None = None
-        self.extension: str | None = None
-        self.properties: dict[str, Any] = {}
-        self.cache: str | None = None
-        self.source: str | None = None
-        self.thumbnail: _JpegBlob = _JpegBlob(data=b"")
-        self.raw: dict[str, Any] = {}
-
-    # -- identity -----------------------------------------------------------
-
-    __hash__ = None
-
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, Result):
-            return (
-                self.url == other.url
-                and self.status == other.status
-                and self.source_status == other.source_status
-                and self.thumbnail == other.thumbnail
-            )
-        return NotImplemented
-
-    def __ne__(self, other: object) -> bool:
-        eq = self.__eq__(other)
-        if eq is NotImplemented:
-            return NotImplemented
-        return not eq
-
-    def __repr__(self) -> str:
-        return f"<thumbrella.Result {self.status} {self.url!r}>" 
-
-    # -- freshness ----------------------------------------------------------
-
-    def is_fresh(self) -> bool:
-        """Check if the cached result is still fresh.
-
-        Parses the hex epoch prefix from the ``cache`` field.  Returns
-        ``False`` when no cache data is available (always stale).
-        """
-        if not self.cache:
-            return False
-        try:
-            epoch_hex, _, _ = self.cache.partition(":")
-            expires = int(epoch_hex, 16)
-        except (ValueError, TypeError):
-            return False
-        return expires > 0 and expires > time.time()
-
-    def is_success(self) -> bool:
-        """True when the thumbnail was produced successfully."""
-        return self.status == Status.SUCCESS
-
-    def raise_for_status(self) -> Result:
-        """Raise an error if the result status is not successful or
-        not-modified.  Returns ``self`` for chaining."""
-        from .errors import ThumbError
-
-        if self.status == Status.SUCCESS:
-            return self
-        raise ThumbError(
-            f"thumbnail failed for {self.url}: {self.status}"
-            + (f" — {self.message}" if self.message else "")
-        )
-
-    def verify(self) -> Result:
-        """Check this result is usable.  Returns ``self`` for chaining.
-
-        Raises :class:`ThumbError` on failure.  Symmetric with
-        :meth:`Client.verify`.
-        """
-        return self.raise_for_status()
-
-    # -- buffer protocol ----------------------------------------------------
-
-    def __bytes__(self) -> bytes:
-        return self.thumbnail.bytes
-
     def __len__(self) -> int:
-        return len(self.thumbnail.bytes)
+        """Byte length of the decoded JPEG, computed without decoding."""
+        if self._data is not None:
+            return len(self._data)
+        if self._b64:
+            # (n * 3) // 4 gives the decoded length for any valid base64
+            # string, minus padding chars that carry no data.
+            return (len(self._b64) * 3) // 4 - self._b64[-4:].count("=")
+        return 0
 
-    # -- property accessors (forward-compat) --------------------------------
+    def __repr__(self) -> str:
+        return f"<thumbrella.EncodedJpeg bytes={len(self)}>"
 
-    def get(self, key: str, default: Any = None) -> Any:
-        """Get a field from the raw JSON dict — useful for new server fields
-        that the client library hasn't added as attributes yet."""
-        return self.raw.get(key, default)
 
-    # -- internal -----------------------------------------------------------
+class _BytesReader:
+    """Zero-copy read-only binary IO wrapping a bytes object."""
 
-    def _update_from_json(self, raw: dict[str, Any]) -> None:
-        """Update all fields in-place from a parsed JSON response dict."""
-        self.raw = raw
-        self.status = raw.get("status", Status.CLIENT_ERROR)
-        self.source_status = raw.get("source_status")
-        self.duration = float(raw.get("duration", 0))
-        self.download_size = int(raw.get("download_size", 0))
-        self.message = raw.get("message")
-        self.strategy = raw.get("strategy")
-        self.placeholder = raw.get("placeholder")
-        self.mime = raw.get("mime")
-        self.file_size = raw.get("file_size")
-        self.kind = raw.get("kind")
-        self.extension = raw.get("extension")
-        self.properties = raw.get("properties") or {}
-        self.cache = raw.get("cache")
+    def __init__(self, data: bytes) -> None:
+        self.closed = False
+        self._data = data
+        self._view = memoryview(data)
+        self._pos = 0
 
-        self.source = raw.get("source")
-
-        # Pop thumbnail before storing raw — the blob owns it now.
-        # Keeping b64 in raw wastes memory for the lifetime of the result.
-        thumb = raw.pop("thumbnail", "")
-        if self.placeholder is not None:
-            self.thumbnail = self._get_or_create_placeholder_blob(thumb)
+    def read(self, n: int = -1) -> memoryview | bytes:
+        if n < 0:
+            chunk = self._view[self._pos :]
+            self._pos = len(self._view)
         else:
-            self.thumbnail = _JpegBlob.from_wire(thumb)
+            end = self._pos + n
+            chunk = self._view[self._pos : end]
+            self._pos += len(chunk)
 
-    def _set_client_error(self, message: str) -> None:
-        """Mark the result as a client-side error (server unreachable)."""
-        self.status = Status.CLIENT_ERROR
-        self.message = message
-        self.thumbnail = _JpegBlob(data=_FAILED_PLACEHOLDER)
+        # memoryview is somewhat limited in that it doesn't support methods
+        # like "startswith`, which are definitely used by image libraries like
+        # Pillow to do data sniffing. But none of that is needed for actual
+        # decoding passes. In an effort to be "low copy" of data we cheat by
+        # handing out two incompatible data types. Enjoy the (negligable)
+        # effeciency. Choke on the tears of non-deterministic errors.
+        if len(chunk) < 128:
+            return chunk.tobytes()
+        return chunk
 
-    def _update_from_result(self, other: Result) -> None:
-        """Copy fields from another Result for the same URL.
+    def readinto(self, buf: bytearray | memoryview) -> int:
+        n = min(len(buf), len(self._view) - self._pos)
+        memoryview(buf)[:n] = self._view[self._pos : self._pos + n]
+        self._pos += n
+        return n
 
-        Used when a cache hit returns a different Result instance than the
-        one the caller holds — the caller's instance is updated in-place.
-        """
-        if other is self:
-            return
-        self.status = other.status
-        self.source_status = other.source_status
-        self.duration = other.duration
-        self.download_size = other.download_size
-        self.message = other.message
-        self.strategy = other.strategy
-        self.placeholder = other.placeholder
-        self.mime = other.mime
-        self.file_size = other.file_size
-        self.kind = other.kind
-        self.extension = other.extension
-        self.properties = dict(other.properties)
-        self.cache = other.cache
-        self.source = other.source
-        self.thumbnail = other.thumbnail
-        self.raw = dict(other.raw)
-
-    def _get_or_create_placeholder_blob(self, thumb: Any) -> _JpegBlob:
-        """Get a shared placeholder blob for this server+placeholder key."""
-        placeholder_key = self.placeholder or "unknown"
-        if isinstance(thumb, str):
-            thumb_key = thumb
-        elif isinstance(thumb, bytes):
-            thumb_key = thumb.hex()
+    def seek(self, offset: int, whence: int = 0) -> int:
+        if whence == os.SEEK_SET:
+            self._pos = max(0, min(offset, len(self._view)))
+        elif whence == os.SEEK_CUR:
+            self._pos = max(0, min(self._pos + offset, len(self._view)))
+        elif whence == os.SEEK_END:
+            self._pos = max(0, min(len(self._view) + offset, len(self._view)))
         else:
-            thumb_key = ""
+            raise ValueError(f"invalid whence: {whence}")
+        return self._pos
 
-        key = f"{self._server_key}|{placeholder_key}|{thumb_key}"
-        shared = _PLACEHOLDER_POOL.get(key)
-        if shared is not None:
-            return shared
+    def tell(self) -> int:
+        return self._pos
 
-        blob = _JpegBlob.from_wire(thumb)
-        _PLACEHOLDER_POOL[key] = blob
-        return blob
+    def getvalue(self):
+        return self._data
+
+    def readable(self) -> bool:
+        return True
+
+    def writable(self) -> bool:
+        return False
+
+    def isatty(self) -> bool:
+        return False
+
+    def seekable(self) -> bool:
+        return True
+
+    def write(self, _data: bytes) -> int:
+        raise io.UnsupportedOperation("write")
+
+    def truncate(self, _size: int | None = None) -> int:
+        raise io.UnsupportedOperation("truncate")
+
+    def fileno(self) -> int:
+        raise io.UnsupportedOperation("fileno")
+
+    def close(self) -> None:
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args) -> bool:
+        return False
+
+
+# Client side placeholder handles when server unreachable
+_FAILED_PLACEHOLDER = None
+
+def _failed_thumbnail():
+    """Shared client failure thumbnail"""
+    global _FAILED_PLACEHOLDER
+    if not _FAILED_PLACEHOLDER:
+        data = pkgutil.get_data("thumbrella", "failed.jpeg")
+        _FAILED_PLACEHOLDER = EncodedJpeg(data=data)
+    return _FAILED_PLACEHOLDER

@@ -1,20 +1,27 @@
 """Status and type constants — string-based for cross-language portability."""
 
 
+DEFAULT_BASE = "http://api.thumbrella.dev/"
+
+MAX_BACKOFF = 60.0
+
+HTTP_TIMEOUT = 12
+
+HTTP_BACKOFF_TICK = 0.3
+
+
 class Status:
-    """Job status values returned by the server."""
+    """Result statuses."""
 
     SUCCESS = "success"
     FAILED = "failed"
     OVERLOADED = "overloaded"
     INTERMEDIATE = "intermediate"
-
-    # Client-side synthetic status (server unreachable)
-    CLIENT_ERROR = "client_error"
+    UNAVAILABLE = "unavailable"  # Only ever provided by the client
 
 
 class FileKind:
-    """Media kind — matches the server's ``FileKind`` enum."""
+    """Result media kinds."""
 
     IMAGE = "image"
     VIDEO = "video"
@@ -29,18 +36,11 @@ class FileKind:
 
 
 class Source:
-    """How the thumbnail was produced.  ``None`` on failure."""
+    """Result source — how the thumbnail was produced."""
 
     RENDER = "render"
     SHORTCUT = "shortcut"
     CACHE = "cache"
-    CLIENT = "client"
-
-
-class Strategy:
-    """Processing strategy used — matches the server's ``Strategy`` enum."""
-
-    RENDER = "render"
-    PROGRESSIVE = "progressive"
-    EMBEDDED = "embedded"
+    NOT_MODIFIED = "not_modified"
     FALLBACK = "fallback"
+    CLIENT = "client"

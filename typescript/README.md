@@ -55,10 +55,7 @@ npm run build
 ```ts
 import { ThumbrellaClient } from "./src/index.js";
 
-const client = new ThumbrellaClient({
-  baseUrl: process.env.TBR_SERVER ?? "https://thumbrella-api.thumbrella.workers.dev",
-  apiKey: process.env.TBR_API_KEY,
-});
+const client = new ThumbrellaClient(process.env.TBR_CONNECT);
 
 const status = await client.getStatus();
 const result = await client.run({ prompt: "Hello" });

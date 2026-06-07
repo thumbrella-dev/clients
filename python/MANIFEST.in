@@ -1,1 +1,1 @@
-recursive-include src/thumbrella/placeholders *.jpg
+include src/thumbrella/failed.jpg

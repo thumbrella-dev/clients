@@ -1,0 +1,15 @@
+{
+  "name": "thumbrella-astro-demo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@thumbrella/astro": "file:..",
+    "@thumbrella/client": "file:../../typescript",
+    "astro": "^5.0.0"
+  }
+}
