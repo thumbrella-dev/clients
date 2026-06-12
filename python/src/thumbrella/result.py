@@ -13,16 +13,47 @@ from .cache import is_cache_fresh
 
 
 class Result:
-    """A single thumbnail request outcome — process fields + stable media.
+    """Result for every url.
 
-    Each ``Result`` is unique per request invocation.  The ``media``
-    attribute is the stable, reusable payload — two results for the same
-    file share the same ``Media`` instance.
+    The result describes the operation for every thumbnail url. It handled both
+    successed and failures. There are two levels of fields on the result.
+    
+    The top level ``url`` attribute contains the origin url the request was made
+    for.
 
-    Top-level fields describe *this invocation* (status, timing, source).
-    The ``media`` sub-object holds the thumbnail, metadata, and cache token.
+    The ``status`` attribute is used to help determine how this result should be
+    handled. All statuses will still include an image, even for failures.
+    Comparing the status to the defined values like
+    `thumbrella.Status.SUCCESSFUL` is the best way to handle the status. The
+    `verify()` method can also be used to return either a successful result,
+    or raise an exception representing the problem.
+    
+    The top level fields all represent the process of generating the result.
+    These describe if the operation was successful, how caching was involved,
+    and the operations used by either the client or server. Most top level
+    fields are optionally None, and may not be filled in, especially if the
+    result was a failure.
 
-    On failure, ``media`` is ``None`` and ``message`` explains why.
+    The ``media`` attribute represents all data collected about the media in a
+    ``Media` value. This describes  file size, the mime type, and more. 
+    
+    This data is consistent and repeatable. When requesting data that has been
+    cached by either the client or the server, the result will be the same media
+    value that has been returned previously. The media objects have "object
+    identity", which simplifies application caching and change tracking.
+
+    The media also contains a ``thumbnail`` attribute which represents the jpeg
+    encoded binary data for the thumbnail image. This binary data can be shared
+    across multiple ``Media`` objects for efficient instances.
+    
+    Only the ``Client` methods generate ``Result`` values. They are intended to
+    be immutable and constant. This is the same for the ``Media`` attribute.
+
+    The fields and their meaning are described in more detail at
+    https://thumbrella.dev/docs/result. The ``raw`` attribute represents the
+    raw json data returned by the server, although the thumbnail binary data
+    is removed for efficiency.
+
     """
     __slots__ = (
         "url", "status", "message", "source", "duration", "download_size", 
@@ -61,7 +92,7 @@ class Result:
         url: str,
         message: str,
     ) -> Result:
-        """Build result from client side failure, or unresponsive server."""
+        """Build result from client side failure or unresponsive server."""
         data = {"url": url, "status": Status.FAILED, "source": Source.CLIENT, "message": message}
         return Result(data, thumbnail=_failed_thumbnail())
 
@@ -69,10 +100,15 @@ class Result:
         return f"<thumbrella.Result {self.status} {self.url!r}>"
 
     def verify(self) -> Result:
-        """Check this result is usable.  Returns ``self`` for chaining.
+        """Check if the result succeeded.
 
-        Raises :class:`ThumbError` on failure.  Symmetric with
-        :meth:`Client.verify`.
+        This will return the successful result (itself) or raise a
+        descriptive `ThumbError` exception.
+
+        Failed results will still contain a placeholder thumbnail image.
+
+        This can be checked more lightwight by comparing
+        ``result.status == thumbrella.Status.SUCCEEDED``.
         """
         from .errors import ThumbError
 
@@ -85,14 +121,33 @@ class Result:
 
 
 class Media:
-    """Stable media identity — reusable, cacheable, hashable by content.
+    """Data from the ``Result`` that describes the source media.
 
-    Two ``Media`` instances with identical content compare equal and hash
-    the same.  Use as dict keys for client-side image caches.
+    Any two results from the same url that were cached (by either the client
+    or the server) will share the same stable identity ``Media`` value for
+    each result.
 
-    The ``thumbnail`` is an :class:`EncodedJpeg` blob.  Placeholder
-    thumbnails are shared across results via a per-server pool.
-    """
+    The attributes are mostly mandatory. If the result has a ``media``
+    attribute, then these fields will exist.
+
+    The ``properties`` represent optional and additional informatio 
+    Thumbrella provides to describe the media. Each ``kind`` has a different
+    schema for what could be included in the properties. For example, images
+    will come with ``width_pixels``, ``height_pixels`` and ``color_bpp``.
+    But these properties are still optional and may not always be included.
+    
+    Stable media identity — reusable, cacheable, hashable by content.
+
+    The ``thumbnail`` attribute will always be valid. This is a
+    `EncodedJpeg` object that provides several conveniences for accessing
+    the binary encoded image data. This thumbnail data can be shared across
+    multiple instances of `Media` objects when it represents placeholder
+    iamges.
+
+    Media objects are only created from the `Client` object as part of
+    a `Result`.
+
+   """
 
     __slots__ = ("url", "thumbnail", "mime", "file_size", "kind",
                  "extension", "properties", "cache", "__weakref__")
@@ -139,23 +194,38 @@ class Media:
     def is_fresh(self) -> bool:
         """Check if the cached result is still fresh.
 
-        Delegates to ``media.cache``.  Returns ``False`` when no cache
-        data is available (always stale).
+        The origin server that hosts the media can describe a time that the
+        contents are guaranteed not to be changed. This freshness checking can
+        be run to check if the client's current time does not need to 
+        resubmit to be updated. 
+
+        The `Client` will efficiently return the same `Media` when it is
+        fresh, without requesting new data from the server.
         """
         return is_cache_fresh(self.cache)
 
 
 class EncodedJpeg:
-    """Lazy-decoded JPEG thumbnail data, hashable by content.
+    """Binary JPEG thumbnail data.
 
-    Used as the value of ``Media.thumbnail``.  Two blobs with identical
-    bytes compare equal and hash the same, so ``media.thumbnail`` can be
-    used directly as a dict key for client-side image caches::
+    This is the value for the ``Media.thumbnail`` attribute. It can be shared
+    across multiple medias to make placeholder images more efficient.
 
-        img_cache = {}
-        img = img_cache.get(result.media.thumbnail)
-        if img is None:
-            img = img_cache[result.media.thumbnail] = load_jpeg(result.media.thumbnail.io)
+    This represents the encoded jpeg data stream. It does not represent pixel or
+    image data itself. It must be used with an image library that understands
+    how to read jpeg encoded data, like Pillow.
+    
+    There are several attributes to simplify loading the results into various
+    Python media and image libraries. This is done efficiently in ways that
+    avoid full copies of the jpeg data.
+
+    Each Thumbrella thumbnail is approximately 5k of jpeg data. When the server
+    encodes the image into json it uses a base64 encoding. This is handled
+    lazily and automatically by this wrapper.
+
+    Usage:
+        img = Image.open(result.media.thumbnail.io)  # PIL (Pillow) surf =
+        pygame.image.load(result.media.thumbnail)  # Pygame
     """
 
     __slots__ = ("_b64", "_data", "_hash", "__weakref__")
@@ -186,19 +256,9 @@ class EncodedJpeg:
         """Fresh zero-copy read-only binary stream of the JPEG data."""
         return _BytesReader(self.bytes)
 
-    @property
-    def key(self) -> int:
-        """Stable hash of the JPEG content — identical to ``hash(blob)``.
-
-        Use as a dict key when you prefer attribute access over operator
-        syntax, or when passing the key to an API that expects an int.
-        """
-        return hash(self)
 
     def __hash__(self) -> int:
-        if self._hash is None:
-            self._hash = hash(self.bytes)
-        return self._hash
+        return id(self)
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, EncodedJpeg):
@@ -215,7 +275,7 @@ class EncodedJpeg:
         return self.bytes
 
     def __len__(self) -> int:
-        """Byte length of the decoded JPEG, computed without decoding."""
+        """Byte length of the encoded jpeg binary data."""
         if self._data is not None:
             return len(self._data)
         if self._b64:

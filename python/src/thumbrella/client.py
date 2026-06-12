@@ -2,35 +2,52 @@
 
 from __future__ import annotations
 
-import json
-import time
-from importlib.metadata import version as _package_version
+import importlib.metadata
 from typing import Any, AsyncIterator, Sequence
-from urllib.parse import urlparse
 
 import requests
 
 from .cache import Cache, MemoryCache, put_all_caches
 from .constants import DEFAULT_BASE, HTTP_TIMEOUT, Source, Status
-from .errors import ConnectionError, TimeoutError, VerifyError
-from .result import EncodedJpeg, Media, Result
+from .result import Result, Media, EncodedJpeg
+from .errors import ConnectionError, TimeoutError, VerifyError, ThumbError
 from .http import parse_connect, requests_json, aio_ndjson
 
 
 class Client:
     """Thumbrella API client.
 
-    All ``thumb()`` calls for the same URL return the same ``Result``
-    instance (fields updated in-place on re-fetch). Results are weakly
-    referenced -- they live as long as your code holds a reference.
+    A centralized configuration for a Thumbrella server and client side caches.
+    The connection is described by a "connect string". By default this uses the
+    ``$TBR_CONNECT`` envirionment variable.
 
-    By default, a small in-memory :class:`MemoryCache` is enabled. Pass
-    ``caches=[]`` to disable caching entirely.
+    Most thumbnails will be handled in batches with the ``batch()`` or
+    ``stream()`` methods. These will return (or iterate) a set of ``Result``
+    objects. Which can individually succeed, fail, or reuse cached contents. All
+    result objects will have a placeholder or failure image, even if one could
+    not be rendered.
 
-    The ``session`` attribute is a :class:`requests.Session` that you can
-    customize for proxies, TLS certificates, custom timeouts, cookies, or
-    any other transport-level tuning. Not needed for normal use.
+    The ``stream()`` is asyncronous and requires an additional optional
+    dependency on `aiohttp`.     
 
+    Creating the client makes no immediate connection to the server. When a
+    connection is misconfigured calls will still provide ``Result`` objects with
+    incomplete results.  Use the ``verify()`` to ensure the configuration is
+    good, which will raise exceptions if there any server side or client side
+    issues.
+
+    A collection of caches can be passed to the client. These are integrated
+    with each of the lookup methods to improve performance. By default the
+    client will use a single ``MemoryCache`` with the default settings. A client
+    can also be created with no caching by explictly passing an empty sequence
+    for the ``caches`` argument.
+
+    This exposes a ``session`` attribute. This a ``requests.Session` object that
+    can be used to customize the http calls being made. Add custom proxies,
+    cookies, tls certificates, and more. The Thumbrella connection string is
+    usually responsible for defining additional http headers. But more extensive
+    customization can be done on an created client.
+    
     Args:
         connect: Optional connection string that overrides ``$TBR_CONNECT``.
         caches: One or more :class:`Cache` backends. ``None`` (the
@@ -68,10 +85,19 @@ class Client:
         return object.__hash__(self)
 
     def verify(self) -> Client:
-        """Check connectivity. Returns ``self`` for chaining.
+        """Check configuration and server connectivity.
 
-        Uses ``/health`` for self-hosted servers and ``/token`` for the
-        cloud platform (which validates the bearer token).
+        Check that the server is operational and the configuration string
+        is valid. If the connection string defines tokens or custom http
+        headers those will also be validated.
+
+        On success this returns itself, to allow method chaining for 
+        simplistic use cases.
+
+        Usage:
+            url = "http://demo.thumbrella.dev/cat.jpeg"
+            tbr = thumbrella.Client()
+            tbr.verify().thumb(url)
 
         Raises:
             VerifyError: if the server is unreachable or misconfigured.
@@ -101,11 +127,27 @@ class Client:
         return self
 
     def thumb(self, url: str) -> Result:
-        """Fetch a thumbnail for a single URL. Raises on failure.
+        """Get a single url result and fail if unsuccessful.
 
-        Delegates to :meth:`batch` and auto-verifies the result. The
-        same ``Result`` instance is returned for repeated calls with the
-        same URL (fields updated in-place).
+        This is a shortcut to regular `batch()` for simple use cases. If
+        there is any problem generating a thumbnail this will result in an
+        exception, instead of a placeholder `Result`.
+        
+        Individual results can get the same effect by using `Result.verify`.
+
+        This call waits for the result to complete before returning. It is
+        syncronous and blocking.
+
+        See the https://thumbrella.dev/docs/api/batch.html server documentation
+        on the batch call for more details on how the server processes these
+        results.
+
+        Usage:
+            url = "http://demo.thumbrella.dev/cat.jpeg"
+            tbr = thumbrella.Client()
+            tbr.thumb(url)
+
+            tbr.batch([url])[0].verify()  # equivalent batch call
 
         Raises:
             ThumbError: if the server returned an error for this URL.
@@ -113,13 +155,29 @@ class Client:
         return self.batch((url, ))[0].verify()
 
     def batch(self, urls: Sequence[str]) -> list[Result]:
-        """Fetch thumbnails for multiple URLs in one request.
+        """Generate multiple thumbnail results.
 
-        Returns a list of ``Result`` objects in the same order as *urls*.
-        Fresh cache entries and invalid URLs are resolved locally; the
-        remainder go to the server in a single ``POST /batch``.
+        Generate a list of ``Result`` objects for the given urls. The returned
+        results are provided in the same order as the input urls.
+
+        This call waits for all results to complete before returning. It is
+        syncronous and blocking. For incremental results, see the `stream()`
+        method.
+
+        This call won't raise exceptions. On errors, results will be marked
+        with a failure status, but will still contain placeholder thumbnails.
+        
+        See the https://thumbrella.dev/docs/api/batch.html server documentation
+        on the batch call for more details on how the server processes these
+        results.
+
+        Usage:
+            urls = ["http://demo.thumbrella.dev/cat.jpeg", "http://demo.thumbrella.dev/dog.png"]
+            tbr = thumbrella.Client()
+            results = tbr.batch(urls)
+            print([f"{r.status} {r.url}" for r in results])
         """
-        done, stale = preflight_urls(urls, self.caches)
+        done, stale = _preflight_urls(urls, self.caches)
 
         if stale:
             try:
@@ -141,15 +199,39 @@ class Client:
         return _ordered_results(done, urls)
 
     async def stream(self, urls: Sequence[str]) -> AsyncIterator[Result]:
-        """Stream thumbnail results as they complete.
+        """Stream multiple thumbnail results as they complete.
 
-        Requires ``aiohttp`` (``pip install thumbrella-client[async]``).
+        This efficiently provides thumbnail results as they become available.
+        Media that requires longer rendering can receive intermediate updates
+        and placeholders as they are processed.
 
-        Fresh cache hits are yielded immediately.  The remainder are sent
-        to the server as a streaming batch; each result is yielded as it
-        arrives via NDJSON.
+        This async method requires the optional ``aiohttp`` module to be
+        importable. If the module cannot be found this raises an exception.
+
+        Every url will receive one result in the iterator, on success or failure.
+        Some media also receives intermediate results as the thumbnail is
+        processed. That can be determined with `Result.status` being
+        `thumbrella.Status.INTERMEDIATE`.
+
+        Python asyncronous code should often use a context to help control
+        lifetime of resources and processing with the ``async wait`` or
+        ``async for`` operators.
+        
+        The ``session`` attribute used to customize the http operations is
+        not used natively by aiiohttp. The major information is transalted
+        to ``aiohttp`` but not all features are expected to work.
+
+        See the https://thumbrella.dev/docs/api/batch.html server documentation
+        on the batch call for more details on how the server processes these
+        results.
+
+        Usage:
+            urls = ["http://demo.thumbrella.dev/cat.jpeg", "http://demo.thumbrella.dev/dog.png"]
+            tbr = thumbrella.Client()
+            async for result in tbr.stream(urls):
+                print([f"{r.status} {r.url}" for r in results])
         """
-        done, stale = preflight_urls(urls, self.caches)
+        done, stale = _preflight_urls(urls, self.caches)
         for url in urls:
             if url in done:
                 yield done[url]
@@ -158,7 +240,11 @@ class Client:
 
         pending: set[str] = {item["url"] for item in stale}
 
-        import aiohttp
+        try:
+            import aiohttp
+        except ImportError:
+            raise ThumbError("The `stream` method requires aiohttp which cannot be imported")
+
         if self._asession is None:
             timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT)
             self._asession = aiohttp.ClientSession(timeout=timeout)
@@ -186,30 +272,40 @@ class Client:
         for item_url in pending:
             yield Result.client_fail(item_url, msg or "stream connection lost")
 
+    def reset_caches(self) -> None:
+        """Reset all attached caches.
+        
+        The cache reset is intended to clear the cache contents and reset
+        statistics and tracking information.
+        """
+        for cache in self.caches:
+            cache.reset()
+
+    async def close(self) -> None:
+        """Close asyncronous sessions.
+
+        The asyncronous workers of the `stream()` call are cleaned up with
+        this async method if needed.
+
+        It is safe to call this method multiple times.
+        """
+        if self._asession is not None:
+            await self._asession.close()
+            self._asession = None
+
     async def __aenter__(self) -> Client:
         return self
 
     async def __aexit__(self, *_: Any) -> None:
         await self.close()
 
-    def clear_caches(self) -> None:
-        """Remove all entries from all registered caches."""
-        for cache in self.caches:
-            cache.clear()
-
-    async def close(self) -> None:
-        """Close persistent sessions.  Safe to call multiple times."""
-        if self._asession is not None:
-            await self._asession.close()
-            self._asession = None
-
 
 def _client_user_agent() -> str:
     """Build a User-Agent string from the installed package version."""
     try:
-        ver = _package_version("thumbrella-client")
+        ver = importlib.metadata.version("thumbrella-client")
     except Exception:
-        ver = "0.1.0"
+        ver = "dev"
     return f"thumbrella-python/{ver}"
 
 
@@ -296,7 +392,7 @@ def _ordered_results(
     return results
 
 
-def preflight_urls(
+def _preflight_urls(
     urls: Sequence[str],
     caches: Sequence[Cache],
 ) -> tuple[dict[str, Result], list[dict[str, str]]]:

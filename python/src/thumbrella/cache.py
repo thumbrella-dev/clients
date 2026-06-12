@@ -11,7 +11,17 @@ if TYPE_CHECKING:
 
 
 class Cache(ABC):
-    """Abstract base class for result caches."""
+    """Abstract base class for result caches.
+    
+    Caches are passed to the `Client` when constructed. Each client works
+    with a stack of cache objects, and will use a small `MemoryCache`
+    by default.
+
+    The caches offer limited management (`clear`) methods and simple
+    statistics tracking (`hits` and `misses`)
+
+    A cache can be used with multiple clients at the same time.
+    """
 
     def __eq__(self, other: object) -> bool:
         return self is other
@@ -24,19 +34,19 @@ class Cache(ABC):
 
     @abstractmethod
     def get(self, url: str) -> "Media | None":
-        """Return a cached :class:`Media` for *url*, or ``None``."""
+        """Get the possible cached media for an url."""
 
     @abstractmethod
     def put(self, media: "Media") -> None:
-        """Store *media* in the cache."""
+        """Store cached media for an url."""
 
     @abstractmethod
     def remove(self, url: str) -> None:
-        """Remove any cached entry for *url*."""
+        """Remove possible cached media for an url."""
 
     @abstractmethod
-    def clear(self) -> None:
-        """Remove all entries."""
+    def reset(self) -> None:
+        """Clear all cached urls and reset statistics."""
 
     @abstractmethod
     def __len__(self) -> int:
@@ -54,10 +64,27 @@ class Cache(ABC):
 
 
 class MemoryCache(Cache):
-    """In-memory LRU-ish cache with a size limit.
+    """A small temporary cache for the current process.
 
-    When the cache exceeds *max_items*, the least-recently-used entry is
-    evicted.
+    The default cache stores a small amount of thumbnails in memory. Nothing
+    is stored after the cache is removed.
+
+    Each Thumbrella `Client` works with a stack of cache objects, assigned
+    at construction time. By default the client creates and uses this
+    `MemoryCache` with the default arguments. 
+
+    This cache uses an LRU strategy to keep the number of thumbnails
+    within the specified `max_items` limit. 
+    
+    Most thumbnails will use approximately 5K worth of data each.
+
+    Usage:
+        cache = thumbrella.MemoryCache(max_items=100)
+        tbr = thumbrella.Client(caches=[cache])
+        tbr.batch(urls)
+
+        assert len(cache) == len(urls)
+        assert (cache.hits + cache.misses) == len(urls)
     """
 
     def __init__(self, max_items: int = 256) -> None:
@@ -108,7 +135,7 @@ class MemoryCache(Cache):
         except (KeyError, ValueError):
             pass
 
-    def clear(self) -> None:
+    def reset(self) -> None:
         self._store.clear()
         self._order.clear()
         self._hits = 0
@@ -130,6 +157,7 @@ class MemoryCache(Cache):
         return (self._store[u] for u in self._order)
 
 
+# internal
 def is_cache_fresh(cache_value: str) -> bool:
     """Check if the contents of a cache screen identify it as still fresh.
 
@@ -148,6 +176,7 @@ def is_cache_fresh(cache_value: str) -> bool:
     return expires > 0 and expires > time.time()
 
 
+# internal
 def put_all_caches(caches: Sequence[Cache], media: Media | None) -> None:
     """Store media in all registered caches."""
     if media is not None:

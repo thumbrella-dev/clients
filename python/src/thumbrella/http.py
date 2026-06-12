@@ -14,52 +14,11 @@ from .errors import ConnectionError, TimeoutError
 if TYPE_CHECKING:
     import aiohttp
 
-# Global backoff — shared across all Client instances.
-_host_backoff: dict[str, tuple[float, int]] = {}
-
-
-def check_backoff(host: str) -> None:
-    """Check if host is on backoff timeout for ConnectionError"""
-    global _host_backoff
-    until, _ = _host_backoff.get(host, (0, 0))
-    if time.monotonic() < until:
-        time.sleep(HTTP_BACKOFF_TICK)
-        raise ConnectionError("Server too busy, retry soon")
-
-
-def record_backoff(host: str, throttled: bool) -> None:
-    global _host_backoff
-    if throttled:
-        _, failures = _host_backoff.get(host, (0, 0))
-        failures += 1
-        delay = min(2 ** failures, MAX_BACKOFF)
-        # Better to use a retry-after header if available?
-        _host_backoff[host] = (time.monotonic() + delay, failures)
-    else:
-        _host_backoff.pop(host, None)
-
-
 def parse_connect(
     connect: str | None,
     session: requests.Session,
 ) -> Tuple[str, str]:
-    """Parse a connect string, apply headers to *session*, return base URL.
-
-    Formats
-    -------
-    ``TOKEN``
-        Bearer token for the cloud platform.  Sets ``Authorization: Bearer``.
-        Uses the default cloud API base URL.
-    ``http://host:port``
-        Bare server URL, no auth.
-    ``http://host:port,TOKEN``
-        Comma-separated suffix.  Bare strings (no ``=``) set
-        ``Authorization: Bearer TOKEN``.
-    ``http://host:port,Token1,Header=Val,Token2``
-        Assignments become http headers
-    ``None``
-        Reads ``TBR_CONNECT`` env var, then falls back to the default.
-    """
+    """Parse a connect string into a session object."""
     if connect is None:
         connect = os.environ.get("TBR_CONNECT", DEFAULT_BASE)
 
@@ -98,23 +57,8 @@ def requests_json(
     path: str,
     **kwargs: Any,
 ) -> Any:
-    """Send an HTTP request to the server with backoff for 429/503.
-
-    Args:
-        method: HTTP method (``"GET"``, ``"POST"``, etc.).
-        path: Server path (e.g. ``"/batch"``).
-        headers: Extra headers merged with session defaults.
-        **kwargs: Passed to ``requests.Request`` (``params``, ``json``,
-            ``data``, etc.).
-
-    Returns:
-        A :class:`requests.Response`.
-
-    Raises:
-        ConnectionError: could not reach the server.
-        TimeoutError: request timed out.
-    """
-    check_backoff(host)
+    """Manage blocking, syncronous http post through requests"""
+    _check_backoff(host)
 
     url = base_url + path
     headers = {"Accept": "application/json"}
@@ -130,7 +74,7 @@ def requests_json(
     except requests.ConnectionError as exc:
         raise ConnectionError(f"could not connect to {host}: {exc}") from exc
 
-    record_backoff(host, response.status_code in (429, 503))
+    _record_backoff(host, response.status_code in (429, 503))
     return response.json()
 
 
@@ -141,12 +85,8 @@ async def aio_ndjson(
     path: str,
     **kwargs: Any,
 ) -> AsyncIterator[dict[str, Any]]:
-    """POST *json_body* to *url* and yield each NDJSON line as a parsed dict.
-
-    If *session* is given it is reused (connection pooling, DNS cache);
-    otherwise a new one is created per call.
-    """
-    check_backoff(host)
+    """Manage asyncronous streaming http post through aiiohttp"""
+    _check_backoff(host)
 
     url = base_url + path
     headers = {"Accept": "application/x-ndjson"}
@@ -156,7 +96,7 @@ async def aio_ndjson(
     async with session.post(
         url, json=json_body, headers=headers, **kwargs
     ) as response:
-        record_backoff(host, response.status in (429, 503))
+        _record_backoff(host, response.status in (429, 503))
 
         if not response.ok:
             return
@@ -180,4 +120,29 @@ async def aio_ndjson(
                     yield json.loads(line)
                 except json.JSONDecodeError:
                     pass
+
+
+# Global backoff — shared across all Client instances.
+_host_backoff: dict[str, tuple[float, int]] = {}
+
+
+def _check_backoff(host: str) -> None:
+    """Check if host is on backoff timeout for ConnectionError"""
+    global _host_backoff
+    until, _ = _host_backoff.get(host, (0, 0))
+    if time.monotonic() < until:
+        time.sleep(HTTP_BACKOFF_TICK)
+        raise ConnectionError("Server too busy, retry soon")
+
+
+def _record_backoff(host: str, throttled: bool) -> None:
+    global _host_backoff
+    if throttled:
+        _, failures = _host_backoff.get(host, (0, 0))
+        failures += 1
+        delay = min(2 ** failures, MAX_BACKOFF)
+        # Better to use a retry-after header if available?
+        _host_backoff[host] = (time.monotonic() + delay, failures)
+    else:
+        _host_backoff.pop(host, None)
 

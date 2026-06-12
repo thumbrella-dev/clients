@@ -14,7 +14,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "account": "tsx scripts/account.ts"
+    "account": "tsx scripts/account.ts",
+    "bench": "tsx scripts/bench.ts"
   },
   "keywords": [
     "thumbrella",

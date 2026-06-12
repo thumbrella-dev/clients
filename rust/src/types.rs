@@ -12,8 +12,6 @@ pub mod status {
     pub const FAILED: &str = "failed";
     pub const OVERLOADED: &str = "overloaded";
     pub const INTERMEDIATE: &str = "intermediate";
-    /// Server returned a placeholder icon — format not renderable.
-    pub const PLACEHOLDER: &str = "placeholder";
     /// Client-side synthetic (server unreachable).
     pub const UNAVAILABLE: &str = "unavailable";
 }
@@ -26,8 +24,10 @@ pub mod source {
     pub const CACHE: &str = "cache";
     /// Client cache hints were valid — no new thumbnail needed.
     pub const NOT_MODIFIED: &str = "not_modified";
-    /// Server fell back to a placeholder icon.
+    /// A registered renderer tried but could not handle this format.
     pub const FALLBACK: &str = "fallback";
+    /// No renderer was registered for this format at all.
+    pub const PLACEHOLDER: &str = "placeholder";
     /// Client-side synthetic (no network call).
     pub const CLIENT: &str = "client";
 }
@@ -54,8 +54,17 @@ pub enum Error {
 
 // ── Thumbnail ────────────────────────────────────────────────────────────
 
-/// Lazy-decoded JPEG thumbnail data.  Hashable by content so it can be
-/// used as a key in collections for client-side image caching.
+/// Binary JPEG thumbnail data.
+///
+/// This represents the encoded JPEG data stream — not pixel data.  It can
+/// be shared across multiple `Media` objects via `Arc` to make placeholder
+/// images more efficient.
+///
+/// Each Thumbrella thumbnail is approximately 5 KB of JPEG data. When the
+/// server encodes the image into JSON it uses a base64 encoding, handled
+/// transparently by the `From<String>` / `Into<String>` impls.
+///
+/// See <https://thumbrella.dev/docs/result> for full documentation.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub struct Thumbnail {
@@ -151,7 +160,20 @@ impl std::fmt::Debug for Thumbnail {
 
 // ── Media ────────────────────────────────────────────────────────────────
 
-/// Stable media identity — reusable, cacheable payload.
+/// Data from the [`ResultData`] that describes the source media.
+///
+/// Any two results from the same URL that were cached (by either the client
+/// or the server) will share a `Clone` of the same stable `Media` value.
+///
+/// The `properties` represent optional additional information Thumbrella
+/// provides to describe the media. Each `kind` has a different schema for
+/// what could be included. For example, images will come with
+/// `width_pixels`, `height_pixels` and `color_bpp`. But these properties
+/// are still optional and may not always be included.
+///
+/// The `thumbnail` attribute will always be valid.
+///
+/// See <https://thumbrella.dev/docs/result> for full documentation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Media {
     pub url: String,
@@ -190,7 +212,29 @@ impl Media {
 
 // ── Result ───────────────────────────────────────────────────────────────
 
-/// A single thumbnail request outcome — process fields + media sub-object.
+/// Result for every URL.
+///
+/// The result describes the operation for every thumbnail URL. It handles both
+/// successes and failures.
+///
+/// The `status` field determines how this result should be handled. All
+/// statuses will still include a thumbnail image, even for failures.
+/// Comparing against the [`status`] constants is the best way to branch on
+/// outcome.
+///
+/// The top-level fields represent the process of generating the result —
+/// whether the operation was successful, how caching was involved, and the
+/// operations used by either the client or server.
+///
+/// The `media` field holds all data collected about the source media in a
+/// [`Media`] value. When requesting data that has been cached by either the
+/// client or the server, the result will reuse a clone of the same media
+/// value that was returned previously.
+///
+/// The `raw` field holds the raw JSON returned by the server, though the
+/// thumbnail binary data is stripped for efficiency.
+///
+/// See <https://thumbrella.dev/docs/result> for full documentation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResultData {
     pub url: String,

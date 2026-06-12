@@ -1,20 +1,55 @@
 import { Media } from "./types.js";
 
 /**
- * Abstract result cache — stores Media objects, keyed by URL.
+ * Abstract base for result caches.
+ *
+ * Caches are passed to the {@link Client} when constructed. Each client works
+ * with a stack of cache objects, and will use a small {@link MemoryCache}
+ * by default.
+ *
+ * The caches offer limited management methods and simple statistics tracking
+ * (`hits` / `misses`). A cache can be used with multiple clients at the
+ * same time.
+ *
+ * See https://thumbrella.dev/docs/cache for full documentation.
  */
 export interface Cache {
+  /** Get the possible cached media for a URL. */
   get(url: string): Media | undefined;
+  /** Store cached media for a URL. */
   put(media: Media): void;
+  /** Remove possible cached media for a URL. */
   remove(url: string): void;
-  clear(): void;
+  /** Clear all cached URLs and reset statistics. */
+  reset(): void;
+  /** Number of cached entries. */
   readonly size: number;
+  /** Number of cache hits since creation or last reset. */
   readonly hits: number;
+  /** Number of cache misses since creation or last reset. */
   readonly misses: number;
 }
 
 /**
- * In-memory LRU-ish cache with a size limit.
+ * A small temporary cache for the current process.
+ *
+ * The default cache stores a small amount of thumbnails in memory. Nothing
+ * is stored after the cache is removed.
+ *
+ * Each Thumbrella {@link Client} works with a stack of cache objects, assigned
+ * at construction time. By default the client creates and uses this
+ * `MemoryCache` with the default arguments.
+ *
+ * This cache uses an LRU strategy to keep the number of thumbnails within
+ * the specified `maxItems` limit.
+ *
+ * Most thumbnails will use approximately 5 KB worth of data each.
+ *
+ * Usage:
+ * ```ts
+ * const cache = new MemoryCache(100);
+ * const tbr = new Client({ caches: [cache] });
+ * ```
  */
 export class MemoryCache implements Cache {
   private maxItems: number;
@@ -57,7 +92,7 @@ export class MemoryCache implements Cache {
     this.order = this.order.filter((u) => u !== url);
   }
 
-  clear(): void {
+  reset(): void {
     this.store.clear();
     this.order = [];
     this._hits = 0;

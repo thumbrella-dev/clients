@@ -198,6 +198,34 @@ function preflightUrls(
 
 // ── client ────────────────────────────────────────────────────────────────
 
+/**
+ * Thumbrella API client.
+ *
+ * A centralized configuration for a Thumbrella server and client-side caches.
+ * The connection is described by a "connect string". By default this uses the
+ * `$TBR_CONNECT` environment variable.
+ *
+ * Most thumbnails will be handled in batches with the {@link batch} or
+ * {@link stream} methods. These will return (or iterate) a set of
+ * {@link Result} objects, which can individually succeed, fail, or reuse
+ * cached contents. All result objects will have a placeholder or failure
+ * image, even if one could not be rendered.
+ *
+ * `stream()` is asynchronous and yields results as they complete.
+ *
+ * Creating the client makes no immediate connection to the server. When a
+ * connection is misconfigured calls will still provide {@link Result} objects
+ * with incomplete results. Use {@link verify} to ensure the configuration is
+ * good, which will throw if there are server-side or client-side issues.
+ *
+ * A collection of caches can be passed to the client. These are integrated
+ * with each of the lookup methods to improve performance. By default the
+ * client will use a single {@link MemoryCache} with the default settings.
+ * A client can also be created with no caching by explicitly passing an
+ * empty array for the `caches` option.
+ *
+ * See https://thumbrella.dev/docs/client for full documentation.
+ */
 export class Client {
   readonly baseUrl: string;
   private headers: Record<string, string>;
@@ -217,6 +245,23 @@ export class Client {
 
   // ── public API ──────────────────────────────────────────────────────────
 
+  /**
+   * Check configuration and server connectivity.
+   *
+   * Check that the server is operational and the configuration string is
+   * valid. If the connection string defines tokens or custom HTTP headers
+   * those will also be validated.
+   *
+   * On success this returns itself, to allow method chaining.
+   *
+   * Usage:
+   * ```ts
+   * const tbr = await new Client().verify();
+   * const result = await tbr.thumb(url);
+   * ```
+   *
+   * @throws {VerifyError} if the server is unreachable or misconfigured.
+   */
   async verify(): Promise<this> {
     const path = this.baseUrl === DEFAULT_BASE ? "/token" : "/health";
     const resp = await this.request("GET", path);
@@ -227,11 +272,40 @@ export class Client {
     return this;
   }
 
+  /**
+   * Get a single URL result and fail if unsuccessful.
+   *
+   * This is a shortcut to regular {@link batch} for simple use cases. If
+   * there is any problem generating a thumbnail this will result in an
+   * exception, instead of a placeholder {@link Result}.
+   *
+   * Individual results can get the same effect by using {@link Result.verify}.
+   *
+   * This call waits for the result to complete before returning.
+   *
+   * See https://thumbrella.dev/docs/api/batch.html for server details.
+   *
+   * @throws {ThumbError} if the server returned an error for this URL.
+   */
   async thumb(url: string): Promise<Result> {
     const [result] = await this.batch([url]);
     return result.verify();
   }
 
+  /**
+   * Generate multiple thumbnail results.
+   *
+   * Generate a list of {@link Result} objects for the given URLs. The returned
+   * results are provided in the same order as the input URLs.
+   *
+   * This call waits for all results to complete before returning. For
+   * incremental results, see the {@link stream} method.
+   *
+   * This call won't throw exceptions. On errors, results will be marked
+   * with a failure status, but will still contain placeholder thumbnails.
+   *
+   * See https://thumbrella.dev/docs/api/batch.html for server details.
+   */
   async batch(urls: string[]): Promise<Result[]> {
     const collected = new Map<string, Result>();
     for await (const r of this.stream(urls)) {
@@ -242,6 +316,20 @@ export class Client {
     return urls.map((u) => collected.get(u) ?? Result.clientFail(u, "no result"));
   }
 
+  /**
+   * Stream multiple thumbnail results as they complete.
+   *
+   * This efficiently provides thumbnail results as they become available.
+   * Media that requires longer rendering can receive intermediate updates
+   * and placeholders as they are processed.
+   *
+   * Every URL will receive at least one result in the iterator, on success
+   * or failure. Some media also receives intermediate results as the
+   * thumbnail is processed. That can be determined with
+   * `result.status === Status.INTERMEDIATE`.
+   *
+   * See https://thumbrella.dev/docs/api/batch.html for server details.
+   */
   async *stream(urls: string[]): AsyncGenerator<Result> {
     const { done, stale } = preflightUrls(urls, this.caches);
 
@@ -392,7 +480,13 @@ export class Client {
     return this.caches;
   }
 
-  clearCaches(): void {
-    for (const c of this.caches) c.clear();
+  /**
+   * Reset all attached caches.
+   *
+   * The cache reset is intended to clear the cache contents and reset
+   * statistics and tracking information.
+   */
+  resetCaches(): void {
+    for (const c of this.caches) c.reset();
   }
 }

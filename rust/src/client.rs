@@ -98,6 +98,26 @@ fn parse_connect(connect: Option<&str>) -> ConnectConfig {
 
 /// Thumbrella API client — async-first.
 ///
+/// A centralized configuration for a Thumbrella server and client-side caches.
+/// The connection is described by a "connect string". By default this uses the
+/// `$TBR_CONNECT` environment variable.
+///
+/// Most thumbnails will be handled in batches with the [`batch`](Self::batch) or
+/// [`stream`](Self::stream) methods. These return a set of [`ResultData`]
+/// values, which can individually succeed, fail, or reuse cached contents.
+/// All result objects will have a placeholder or failure image, even if one
+/// could not be rendered.
+///
+/// Creating the client makes no immediate connection to the server. Use
+/// [`verify`](Self::verify) to ensure the configuration is good, which will
+/// return an error if there are server-side or client-side issues.
+///
+/// A collection of caches can be passed to the client via
+/// [`with_caches`](Self::with_caches). By default the client uses a single
+/// [`MemoryCache`] with the default settings. Pass an empty vec for no caching.
+///
+/// See <https://thumbrella.dev/docs/client> for full documentation.
+///
 /// ```no_run
 /// # async fn example() -> Result<(), thumbrella::Error> {
 /// let tbr = thumbrella::Client::new(None);
@@ -158,10 +178,13 @@ impl Client {
         &self.caches
     }
 
-    /// Remove all entries from all caches.
-    pub fn clear_caches(&self) {
+    /// Reset all attached caches.
+    ///
+    /// The cache reset is intended to clear the cache contents and reset
+    /// statistics and tracking information.
+    pub fn reset_caches(&self) {
         for c in &self.caches {
-            c.clear();
+            c.reset();
         }
     }
 
@@ -172,7 +195,13 @@ impl Client {
 
     // ── public API ───────────────────────────────────────────────────────
 
-    /// Check connectivity. Returns `Ok(())` on success.
+    /// Check configuration and server connectivity.
+    ///
+    /// Check that the server is operational and the configuration string is
+    /// valid. If the connection string defines tokens or custom HTTP headers
+    /// those will also be validated.
+    ///
+    /// Returns `Ok(())` on success.
     pub async fn verify(&self) -> Result<(), Error> {
         let path = if self.base_url == DEFAULT_BASE { "/token" } else { "/health" };
         let resp = self.request("GET", path).send().await.map_err(|e| {
@@ -190,7 +219,18 @@ impl Client {
         Ok(())
     }
 
-    /// Fetch a thumbnail for a single URL. Returns `Err` on failure.
+    /// Get a single URL result and fail if unsuccessful.
+    ///
+    /// This is a shortcut to regular [`batch`](Self::batch) for simple use
+    /// cases. If there is any problem generating a thumbnail this will result
+    /// in an error, instead of a placeholder [`ResultData`].
+    ///
+    /// Individual results can get the same effect by checking
+    /// `result.status == status::SUCCESS`.
+    ///
+    /// This call waits for the result to complete before returning.
+    ///
+    /// See <https://thumbrella.dev/docs/api/batch.html> for server details.
     pub async fn thumb(&self, url: &str) -> Result<ResultData, Error> {
         let results = self.batch(&[url]).await?;
         let result = results.into_iter().next().unwrap();
@@ -204,7 +244,19 @@ impl Client {
         Ok(result)
     }
 
-    /// Fetch thumbnails for multiple URLs in one request.
+    /// Generate multiple thumbnail results.
+    ///
+    /// Generate a list of [`ResultData`] values for the given URLs. The
+    /// returned results are provided in the same order as the input URLs.
+    ///
+    /// This call waits for all results to complete before returning. For
+    /// incremental results, see the [`stream`](Self::stream) method.
+    ///
+    /// This call won't return errors for individual URL failures. On errors,
+    /// results will be marked with a failure status, but will still contain
+    /// placeholder thumbnails.
+    ///
+    /// See <https://thumbrella.dev/docs/api/batch.html> for server details.
     pub async fn batch(&self, urls: &[&str]) -> Result<Vec<ResultData>, Error> {
         let mut done: HashMap<String, ResultData> = HashMap::new();
         let mut stale_items: Vec<serde_json::Value> = Vec::new();
@@ -304,8 +356,11 @@ impl Client {
 
     /// Stream thumbnail results as they complete.
     ///
-    /// Currently delegates to [`batch`] — true NDJSON streaming is not yet
-    /// implemented. Results are still collected and returned in order.
+    /// Currently delegates to [`batch`](Self::batch) — true NDJSON streaming
+    /// is not yet implemented. Results are still collected and returned in
+    /// order.
+    ///
+    /// See <https://thumbrella.dev/docs/api/batch.html> for server details.
     pub async fn stream(&self, urls: &[&str]) -> Result<Vec<ResultData>, Error> {
         self.batch(urls).await
     }
