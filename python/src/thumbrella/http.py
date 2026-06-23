@@ -14,6 +14,16 @@ from .errors import ConnectionError, TimeoutError
 if TYPE_CHECKING:
     import aiohttp
 
+def _is_auth_token(value: str) -> bool:
+    """True when a value looks like a Thumbrella auth token (`tbr_[a-z]_` prefix)."""
+    return (
+        len(value) >= 6
+        and value.startswith("tbr_")
+        and value[4].islower()
+        and value[5] == "_"
+    )
+
+
 def parse_connect(
     connect: str | None,
     session: requests.Session,
@@ -22,9 +32,12 @@ def parse_connect(
     if connect is None:
         connect = os.environ.get("TBR_CONNECT", DEFAULT_BASE)
 
-    # Bare token — no scheme, no host:port.
+    # Bare value — no scheme.  Dispatch to auth or handshake by prefix.
     if "://" not in connect:
-        session.headers["Authorization"] = f"Bearer {connect}"
+        if _is_auth_token(connect):
+            session.headers["Authorization"] = f"Bearer {connect}"
+        else:
+            session.headers["x-tbr-handshake"] = connect
         return DEFAULT_BASE, "api.thumbrella.dev:0"
 
     segments = connect.split(",")
@@ -42,9 +55,10 @@ def parse_connect(
         if "=" in segment:
             key, _, value = segment.partition("=")
             session.headers[key.strip()] = value.strip()
-        else:
-            # Bare token — always goes to Authorization: Bearer.
+        elif _is_auth_token(segment):
             session.headers["Authorization"] = f"Bearer {segment}"
+        else:
+            session.headers["x-tbr-handshake"] = segment
 
     return base, host
 

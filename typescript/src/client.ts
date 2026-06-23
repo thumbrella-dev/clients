@@ -40,6 +40,13 @@ function recordBackoff(host: string, throttled: boolean): void {
   }
 }
 
+// ── helpers ───────────────────────────────────────────────────────────────
+
+/** True when a value looks like a Thumbrella auth token (`tbr_[a-z]_` prefix). */
+function isAuthToken(s: string): boolean {
+  return /^tbr_[a-z]_/.test(s);
+}
+
 // ── connect string parsing ───────────────────────────────────────────────
 
 interface ConnectConfig {
@@ -52,12 +59,15 @@ export function parseConnect(connect?: string): ConnectConfig {
     || (typeof process !== "undefined" && process.env.TBR_CONNECT)
     || DEFAULT_BASE;
 
-  // Bearer token — no scheme.
+  // Bare value — no scheme.  Dispatch to auth or handshake by prefix.
   if (!raw.includes("://")) {
-    return {
-      baseUrl: DEFAULT_BASE,
-      headers: { Authorization: `Bearer ${raw}` },
-    };
+    const headers: Record<string, string> = {};
+    if (isAuthToken(raw)) {
+      headers.Authorization = `Bearer ${raw}`;
+    } else {
+      headers["x-tbr-handshake"] = raw;
+    }
+    return { baseUrl: DEFAULT_BASE, headers };
   }
 
   // Split on first comma to separate URL from optional suffix.
@@ -76,8 +86,10 @@ export function parseConnect(connect?: string): ConnectConfig {
     const eq = s.indexOf("=");
     if (eq >= 0) {
       headers[s.slice(0, eq).trim()] = s.slice(eq + 1).trim();
-    } else {
+    } else if (isAuthToken(s)) {
       headers.Authorization = `Bearer ${s}`;
+    } else {
+      headers["x-tbr-handshake"] = s;
     }
   }
 

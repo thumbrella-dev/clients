@@ -53,15 +53,24 @@ struct ConnectConfig {
     headers: HashMap<String, String>,
 }
 
+fn is_auth_token(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() >= 6 && b.starts_with(b"tbr_") && b[4].is_ascii_lowercase() && b[5] == b'_'
+}
+
 fn parse_connect(connect: Option<&str>) -> ConnectConfig {
     let raw: String = connect.map(String::from)
         .or_else(|| std::env::var("TBR_CONNECT").ok())
         .unwrap_or_else(|| DEFAULT_BASE.to_string());
 
-    // Bare token — no scheme.
+    // Bare value — no scheme.  Dispatch to auth or handshake by prefix.
     if !raw.contains("://") {
         let mut headers = HashMap::new();
-        headers.insert("Authorization".into(), format!("Bearer {raw}"));
+        if is_auth_token(&raw) {
+            headers.insert("Authorization".into(), format!("Bearer {raw}"));
+        } else {
+            headers.insert("x-tbr-handshake".into(), raw.to_string());
+        }
         return ConnectConfig {
             base_url: DEFAULT_BASE.into(),
             host: "api.thumbrella.dev".into(),
@@ -86,8 +95,10 @@ fn parse_connect(connect: Option<&str>) -> ConnectConfig {
     for seg in suffix.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
         if let Some((k, v)) = seg.split_once('=') {
             headers.insert(k.trim().to_string(), v.trim().to_string());
-        } else {
+        } else if is_auth_token(seg) {
             headers.insert("Authorization".into(), format!("Bearer {seg}"));
+        } else {
+            headers.insert("x-tbr-handshake".into(), seg.to_string());
         }
     }
 
