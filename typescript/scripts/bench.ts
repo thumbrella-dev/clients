@@ -87,15 +87,24 @@ function parseArgs(): Options {
 const INDEX_URL = "https://demo.thumbrella.dev";
 
 interface IndexEntry {
-  full_url: string;
-  name?: string;
+  name: string;
+  size?: number;
+  kind?: string;
 }
 
-async function fetchIndex(): Promise<IndexEntry[]> {
+interface DemoIndex {
+  generated: string;
+  media: string;
+  thumb: string;
+  data: string;
+  files: IndexEntry[];
+}
+
+async function fetchIndex(): Promise<{ mediaTemplate: string; files: IndexEntry[] }> {
   const res = await fetch(INDEX_URL + "/index.json");
   if (!res.ok) throw new Error(`Failed to fetch index: ${res.status}`);
-  const index = await res.json() as { files: IndexEntry[] };
-  return index.files;
+  const index = await res.json() as DemoIndex;
+  return { mediaTemplate: index.media, files: index.files };
 }
 
 // ── Warmup ───────────────────────────────────────────────────────────────
@@ -123,8 +132,8 @@ async function main() {
 
   await tbr.verify();
 
-  const files = await fetchIndex();
-  const urls = files.map((f) => f.full_url);
+  const { mediaTemplate, files } = await fetchIndex();
+  const urls = files.map((f) => mediaTemplate.replace("{{name}}", f.name));
 
   if (!opts.json) {
     console.log(`Benchmark ${urls.length} media for ${tbr.baseUrl}`);
