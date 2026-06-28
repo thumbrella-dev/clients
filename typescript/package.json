@@ -1,7 +1,7 @@
 {
   "name": "@thumbrella/client",
-  "version": "0.1.0",
-  "description": "Lightweight TypeScript client for the Thumbrella HTTP API",
+  "version": "0.3.0",
+  "description": "TypeScript client for the Thumbrella thumbnail API - typed results, streaming batches, pluggable caching",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,21 +12,39 @@
       "default": "./dist/index.js"
     }
   },
+  "bin": {
+    "thumbrella-file": "./dist/bin/file.js"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "account": "tsx scripts/account.ts",
     "bench": "tsx scripts/bench.ts"
   },
   "keywords": [
     "thumbrella",
-    "client",
-    "sdk",
     "thumbnail",
     "image",
+    "media",
     "streaming",
-    "api"
+    "thumbnails"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thumbrella-dev/thumbrella-clients.git",
+    "directory": "typescript"
+  },
+  "homepage": "https://thumbrella.dev/",
+  "bugs": {
+    "url": "https://github.com/thumbrella-dev/thumbrella-clients/issues"
+  },
   "license": "Apache-2.0",
+  "engines": {
+    "node": ">=18"
+  },
   "devDependencies": {
     "@types/node": "^25.9.1",
     "dotenv": "^16.4.5",

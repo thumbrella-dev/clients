@@ -1,7 +1,7 @@
 {
   "name": "@thumbrella/astro",
-  "version": "0.1.0",
-  "description": "Astro helpers built on top of @thumbrella/client",
+  "version": "0.3.0",
+  "description": "Astro components for the Thumbrella thumbnail API - drop-in <Thumbnail> with batch streaming",
   "license": "Apache-2.0",
   "type": "module",
   "exports": {
@@ -10,7 +10,16 @@
     "./Thumbrella.astro": "./src/Thumbrella.astro"
   },
   "dependencies": {
-    "@thumbrella/client": "^0.1.0"
+    "@thumbrella/client": "^0.3.0"
   },
-  "keywords": ["thumbrella", "astro", "thumbnail", "image", "api"]
+  "scripts": {
+    "demo": "cd demo && ./node_modules/.bin/astro dev"
+  },
+  "keywords": ["thumbrella", "astro", "thumbnail", "image", "media", "components"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thumbrella-dev/thumbrella-clients.git",
+    "directory": "astro"
+  },
+  "homepage": "https://thumbrella.dev/docs/client"
 }

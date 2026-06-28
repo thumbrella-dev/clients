@@ -1,16 +1,21 @@
 import { defineConfig } from "astro/config";
+import { fileURLToPath } from "node:url";
+import { resolve, dirname } from "node:path";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const thumbrellaClient = resolve(__dirname, "../../typescript");
 
 export default defineConfig({
+  srcDir: ".",
   server: { host: "0.0.0.0", port: 4333 },
   vite: {
-    server: {
-      proxy: {
-        "/api": {
-          target: "http://localhost:3114",
-          changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/api/, ""),
-        },
+    resolve: {
+      alias: {
+        "@thumbrella/client": thumbrellaClient,
       },
+    },
+    optimizeDeps: {
+      include: ["@thumbrella/client"],
     },
   },
 });

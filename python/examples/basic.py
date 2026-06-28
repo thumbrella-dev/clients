@@ -36,7 +36,7 @@ def thumbnail(url: str, path: Path):
         pixel = img.getpixel((img.width // 2, img.height // 2))
         print("center pixel:", pixel)
     except ImportError:
-        print("Pil image library not found")
+        pass
 
     # Write image to disk
     path.write_bytes(m.thumbnail.bytes if m else b"")

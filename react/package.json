@@ -1,14 +1,34 @@
 {
   "name": "@thumbrella/react",
-  "version": "0.1.0",
-  "description": "React helpers built on top of @thumbrella/client",
+  "version": "0.3.0",
+  "description": "React components for the Thumbrella thumbnail API — <Thumbnail> with batch streaming",
   "license": "Apache-2.0",
   "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "demo": "cd demo && npx vite --host 0.0.0.0 --port 4343"
+  },
   "peerDependencies": {
     "react": ">=18"
   },
   "dependencies": {
-    "@thumbrella/client": "^0.1.0"
+    "@thumbrella/client": "file:../typescript"
   },
-  "keywords": ["thumbrella", "react", "thumbnail", "image", "api"]
+  "keywords": [
+    "thumbrella",
+    "react",
+    "thumbnail",
+    "image",
+    "media",
+    "components"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thumbrella-dev/thumbrella-clients.git",
+    "directory": "react"
+  },
+  "homepage": "https://thumbrella.dev/docs/client"
 }

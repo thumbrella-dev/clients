@@ -10,6 +10,6 @@
   "dependencies": {
     "@thumbrella/astro": "file:..",
     "@thumbrella/client": "file:../../typescript",
-    "astro": "^5.0.0"
+    "astro": "^6.0.0"
   }
 }

@@ -1,43 +1,54 @@
 ---
-// Thumbrella.astro — page-level coordinator for Thumbnail components.
+// Thumbrella.astro — scoped coordinator for <Thumbnail> components.
 //
-// All <Thumbnail> elements on the page batch-load through a single
-// streaming request.  Place this once in your layout; <Thumbnail>
-// components anywhere on the page will use it automatically.
-//
-// Usage (global — once in layout):
-//   <Thumbrella connect="tbr_p_XXXX" />
-//
-// Connect is optional — without it, the client reads TBR_CONNECT from
-// the environment.  Use a publishable key (tbr_p_ prefix) when the
-// connect string appears in client-side HTML.  Secret keys (tbr_s_)
-// should only be used in server-side code.
-//
-// Usage (scoped — for pages that need a different server):
-//   <Thumbrella connect="http://staging:8001#secret">
-//     <Thumbnail src="..." />
+//   <Thumbrella connect="https://demo.thumbrella.dev">
+//     <Thumbnail src="https://demo.thumbrella.dev/media/apollo-exterior.glb" />
+//     <Thumbnail src="https://demo.thumbrella.dev/media/raw-pentax.pef" />
 //   </Thumbrella>
+//
+// Thumbnail components are intended to be grouped inside a Thumbrella
+// component. This allows them to share configuration and be handled in
+// streaming batches, instead of individually. The thumbnails are not
+// required to be immediately children.
+//
+// The primary attribute is the `connect`, which defines the server and/or
+// api keys needed to access a Thumbrella server.
+//
+// NOTICE,
+// Be aware that the thumbnails will be resolved by browsers at viewing time.
+// This will make the server address or keys publically available to any user.
+// Thumbrella keys can be restricted to certain addresses and their own usage
+// quotas. Be sure any key used here is being handled appropriately.
+
 
 interface Props {
-  /** Connection string.  Prefer a publishable key (tbr_p_) when set in HTML. */
+  /** Connection string.  Prefer a publishable key (tbr_p_) in HTML. */
   connect?: string;
+  /**
+   * Only load thumbnails when they scroll into view.
+   * Individual <Thumbnail> elements can override with their own lazyLoad prop.
+   */
+  lazyLoad?: boolean;
 }
 
-const { connect } = Astro.props;
+const { connect, lazyLoad } = Astro.props;
+const rootId = `tbr-${crypto.randomUUID().slice(0, 8)}`;
 ---
 
-{/* The wrapper <div> is a no-op visually — it just provides a hook for */}
-{/* scoped usage.  The init script scans the whole page regardless. */}
-<div data-tbr-root>
+<div data-tbr-root id={rootId} data-tbr-connect={connect || ""} data-tbr-lazy={lazyLoad ? "true" : undefined}>
   <slot />
 </div>
 
 <script>
-  import { initThumbnails } from "@thumbrella/astro";
+  import { initThumbnails } from "./browser.ts";
 
-  // requestAnimationFrame ensures all child components have rendered
-  // their [data-tbr-url] elements before the scan runs.
-  requestAnimationFrame(() => {
-    initThumbnails("{connect}");
-  });
+  for (const el of document.querySelectorAll('[data-tbr-root]:not([data-tbr-init])')) {
+    if (el instanceof HTMLElement) {
+      const c = el.dataset.tbrConnect;
+      const lazy = el.dataset.tbrLazy === "true";
+      requestAnimationFrame(() => {
+        initThumbnails(el, c || undefined, lazy);
+      });
+    }
+  }
 </script>

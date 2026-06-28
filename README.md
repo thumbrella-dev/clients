@@ -1,54 +1,166 @@
-# thumbrella-clients
+# Thumbrella Clients
 
-A collection of lightweight Thumbrella API clients.
+Official client libraries for the [Thumbrella](https://thumbrella.dev) thumbnail
+API. Apache-2.0 licensed. Lightweight, typed, and easy to integrate.
 
-Each client lives in its own subdirectory and is designed to be standalone. The wrappers focus on:
+Thumbrella generates thumbnails for images, video, documents, vector graphics,
+3D models, and more. These clients wrap the HTTP API with language-idiomatic
+interfaces: failure handling, typed results, streaming batches, and persistable
+caching.
 
-- Small surface area for 2-3 HTTP operations.
-- Typed result structures.
-- Language-friendly async streaming wrappers.
-- Buffer-first access to encoded JPEG bytes.
+Thumbrella servers can be self hosted. These libraries make connecting to
+custom servers as simple as the main hosted service.
 
-These clients are intended to be welcoming on-ramps to the service: small, readable, and easy to integrate.
+The full documentation for clients is on the main Thumbrella website,
+[thumbrella.dev/docs/client](https://thumbrella.dev/docs/client).
 
-## Repository Layout
+## Packages
 
-- `typescript`: TypeScript client for Node.js and modern runtimes with `fetch`.
-- `python`: Python client for synchronous and async usage.
-- `go`: Go client with typed responses and stream iteration.
-- `react`: React wrapper package that depends on the TypeScript core client.
-- `astro`: Astro wrapper package that depends on the TypeScript core client.
+There is a growing list of langauges supported by Thumbrella clients. See each
+language readme file for more specific details.
 
-## Package Strategy
+| Language   | Package                                          | Status      |
+|------------|--------------------------------------------------|-------------|
+| TypeScript | [@thumbrella/client](./typescript)               | Prerelease  |
+| Python     | [thumbrella-client](./python)                    | Prerelease  |
+| Rust       | [thumbrella](./rust)                             | Prerelease  |
 
-- Core clients remain independent by language and environment.
-- Frontend JS framework wrappers depend on the base npm TypeScript package.
-- This keeps framework integrations thin while consolidating JavaScript usage around one core package.
+Thumbrella also provides several higher level component libraries for use in
+web browsers. These are highly recomended when creating interactive applications
+for the web.
 
-## AI And Integration Discovery
+| Environment| Package                                          | Status      |
+|------------|--------------------------------------------------|-------------|
+| React      | [@thumbrella/react](./react)                     | Planned     |
+| Astro      | [@thumbrella/astro](./astro)                     | Prerelease  |
 
-For AI-agent and tooling integration guidance, see `AI_INTEGRATION.md`.
-It includes stable operation names, payload shape, and ready-to-copy snippets.
+There are several other examples and subdirectories included that are not
+packages or libraries.
 
-## Temporary Design Notes
+| Directory  | Contents                                                       |
+|------------|----------------------------------------------------------------|
+| http/      | Examples of direct calls to servers (see humao.rest-client)    |
 
-Working implementation notes for the initial client rollout are tracked in `TEMP_CLIENT_DESIGN_NOTES.md`.
-These notes are intentionally temporary and will be folded into permanent docs once contracts stabilize.
+Each subdirectory is independently versioned, tested, and published to its
+language's package registry. Framework components (React, Astro, etc.) depend on
+the core TypeScript package.
 
-## Shared API Shape
+## Library API Overview
 
-All clients implement equivalent high-level operations:
+Each language library exposes a similar set of core operations. Naming follows
+each language's conventions but the semantics are identical. Each language will
+use different `async` behaviors depending on the language and http dependencies.
 
-- `getStatus()`: Service health/status check.
-- `run(request)`: Non-streaming request/response operation.
-- `stream(request)`: Streaming operation yielding incremental events.
-- `runImage(request)`: Non-streaming operation returning encoded JPEG bytes (buffer, byte-array, or blob friendly).
+First create a `Client()` object. This contains server configuration and 
+client caching layers. 
 
-Endpoints are configurable so each package can target different environments.
+The client methods will always return results, even placeholders if the
+Thumbrella server is incaccesible.
 
-## Notes
+The main methods are `batch(urls)` and `stream(urls)`. These both take a list
+of media urls and will return a set of results for each. The batch call will
+provide a full list of results at once, one for each url. The stream provides
+a set of results and intermediate placeholders for thumbnails as soon as they
+become available.
 
-- Clients are intentionally lightweight wrappers, not full SDKs.
-- Keep dependencies minimal in each package.
-- Each subproject includes a local README with usage examples.
-- License is Apache-2.0 to stay consistent with the Rust server and simplify reuse.
+Every url will be provided a result object. These give metadata about the
+media at the provided url. It also describes details about the thumbnail
+process. Even invalid urls will recieve placeholder results.
+
+The `verify()` method on the client and each result will convert failed
+connections or results into an immediate exception with a descriptive
+reason.
+
+The client also has a simplified `thumb(url)` method to lookup a single url
+and get a single result, or fail with an exception.
+
+Each language provides a list of `Cache` object subclasses. These can cache
+results in memory and also persist them for client reuse. Each `Client`
+object accepts a list of cache objects at construction, and will default
+to a minimal in-memory cache by default.
+
+## Library Components Overview
+
+The web component packages usually have a `<Thumbnail>` type of component,
+and some will use a global `<Thumbrella>` component somewhere on the page
+to manage the common configurations.
+
+### Connect Strings
+
+Every client needs a connection string to connect to a server. There are several
+forms this string can take. Usually it is just the url of the server but it can
+be extended with things like authentication tokens and even custom http headers.
+
+By default the client fetches the connection string from the `$TBR_CONNECT`
+environment variable. It can also be passed as an argument to the `Client`
+constructor.
+
+```
+# Local dev server (no auth)
+http://localhost:3114
+
+# Online service uses an authentication token
+tbr_e_oQftPlhB6ulGkdu5lILXKZBM      (example)
+```
+
+## Quick Start
+
+**TypeScript / Node.js**
+```bash
+npm install @thumbrella/client
+```
+```ts
+import { Client } from "@thumbrella/client";
+const tbr = await new Client().verify();
+const result = await tbr.thumb("https://example.com/photo.jpg");
+console.log(result.media?.thumbnail.length, "bytes");
+```
+
+**Python**
+```bash
+pip install thumbrella-client
+```
+```python
+import thumbrella
+tbr = thumbrella.Client().verify()
+result = tbr.thumb("https://example.com/photo.jpg")
+print(len(result.media.thumbnail), "bytes")
+```
+
+**Rust**
+```bash
+cargo add thumbrella
+```
+```rust
+let tbr = thumbrella::Client::new(None);
+tbr.verify().await?;
+let result = tbr.thumb("https://example.com/photo.jpg").await?;
+println!("{} bytes", result.media.unwrap().thumbnail.len());
+```
+
+## Examples
+
+Each package includes runnable examples:
+
+- **basic** — download a single thumbnail to disk
+- **stream** — monitor streaming batch progress
+- **collage** (Python) — build an image grid from streamed thumbnails
+- **gallery** (Python) — batch download with persistent caching
+
+Run them from the package directory:
+
+```bash
+# TypeScript
+cd typescript && npx tsx examples/basic.ts https://demo.thumbrella.dev/media/math-guide.odt doc.jpeg
+
+# Python
+cd python && python examples/basic.py https://demo.thumbrella.dev/media/raw-canon.cr2 cam.jpeg
+
+# Rust
+cd rust && cargo run --example basic https://demo.thumbrella.dev/media/stanford-bunny.stl model.jpg
+```
+
+## License
+
+Apache-2.0. See [LICENSE](./LICENSE).
+

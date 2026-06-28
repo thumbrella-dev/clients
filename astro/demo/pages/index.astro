@@ -1,0 +1,114 @@
+---
+import { Thumbnail, Thumbrella } from "@thumbrella/astro";
+import Explorer from "./Explorer.astro";
+
+const CONNECT = "https://demo.thumbrella.dev";
+
+let items = [];
+let kinds = [];
+try {
+  const resp = await fetch(CONNECT + "/index.json");
+  if (resp.ok) {
+    const data = await resp.json();
+    items = data.files.map(function (entry) {
+      return {
+        name: entry.name,
+        url: data.media.replace("{{name}}", entry.name),
+        size: entry.size,
+        kind: entry.kind || "unknown",
+      };
+    });
+  }
+} catch {}
+
+var kindSet = {};
+items.forEach(function (item) { kindSet[item.kind] = true; });
+kinds = Object.keys(kindSet).sort();
+---
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Thumbrella Astro Demo</title>
+
+</head>
+<body>
+
+  <Explorer title="Thumbrella" kinds={kinds}>
+    <Thumbrella connect={CONNECT} lazyLoad>
+      <div class="grid">
+        {items.map(function (item) {
+          return (
+            <div class="card" data-kind={item.kind}>
+              <Thumbnail src={item.url} alt={item.name} />
+              <div class="info">
+                <div class="name" title={item.name}>{item.name}</div>
+                <div class="meta">{item.kind}</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Thumbrella>
+  </Explorer>
+
+  <script>
+    // Listen for thumbnail results and attach a badge to each one.
+    // The tbr:loaded event fires on the .tbr-wrap element and bubbles.
+    document.addEventListener("tbr:loaded", function (e) {
+      var detail = e.detail;
+      var wrap = e.target;
+      if (!wrap || !wrap.classList.contains("tbr-wrap")) return;
+
+      // Build a small badge from the result data.
+      var badge = document.createElement("div");
+      badge.className = "demo-badge";
+      badge.textContent = detail.source || detail.status;
+      badge.style.color = detail.placeholder ? "#f87171"
+        : detail.source === "cache" ? "#4ade80"
+        : detail.source === "shortcut" ? "#fbbf24"
+        : "#60a5fa";
+
+      wrap.appendChild(badge);
+    });
+  </script>
+</body>
+</html>
+
+
+<style is:global>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, sans-serif;
+    background: #1a1a2e; color: #e0e0e0;
+    display: flex; justify-content: center; align-items: center;
+    min-height: 100vh;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 16px; padding: 12px;
+  }
+  .card {
+    background: #16213e; border-radius: 6px; overflow: hidden;
+    display: flex; flex-direction: column;
+    border: 2px solid invisible;
+  }
+  .card .info { padding: 5px 8px; font-size: 11px; }
+  .card .name {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    color: #c0c0e0;
+  }
+  .card .meta { color: #50507a; margin-top: 1px; }
+
+  /* example badge — built dynamically from tbr:loaded event */
+  .demo-badge {
+    position: absolute; top: 3px; right: 3px; z-index: 3;
+    font-size: 10px; padding: 1px 5px; border-radius: 3px;
+    background: rgba(0, 0, 0, 0.6);
+    pointer-events: none;
+  }
+</style>

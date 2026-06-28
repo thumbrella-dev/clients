@@ -1,0 +1,99 @@
+---
+// Explorer.astro — file-browser window frame for the demo page only.
+// Not part of the public @thumbrella/astro API.
+//
+// Provides a toolbar with filter buttons and a sidebar with links.
+// The default slot goes into the scrollable content area.
+
+interface Props {
+  title?: string;
+  kinds?: string[];
+  links?: { label: string; href: string }[];
+}
+
+const title = Astro.props.title ?? "Thumbrella";
+const kinds = Astro.props.kinds ?? [];
+const links = Astro.props.links ?? [
+  { label: "thumbrella.dev", href: "https://thumbrella.dev" },
+  { label: "Documentation", href: "https://thumbrella.dev/docs" },
+  { label: "GitHub", href: "https://github.com/thumbrella-dev/thumbrella-clients" },
+];
+---
+
+<style is:global>
+  .explorer {
+    width: min(1040px, 100vw - 32px);
+    height: min(700px, 100vh - 32px);
+    background: #0f1629; border-radius: 8px;
+    border: 1px solid #1e2d50;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .explorer-bar {
+    padding: 8px 16px; background: #16213e;
+    border-bottom: 1px solid #0f3460;
+    display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+  }
+  .explorer-bar h1 { font-size: 13px; font-weight: 600; color: #e94560; }
+  .explorer-bar .tb {
+    background: #0f3460; color: #a0a0c0; border: none;
+    padding: 3px 10px; border-radius: 4px; cursor: pointer;
+    font-size: 11px; font-family: inherit;
+  }
+  .explorer-bar .tb.active,
+  .explorer-bar .tb:hover { background: #e94560; color: #fff; }
+  .explorer-main { flex: 1; display: flex; min-height: 0; }
+  .explorer-side {
+    width: 150px; flex-shrink: 0;
+    border-right: 1px solid #0f3460;
+    padding: 12px; display: flex; flex-direction: column; gap: 4px;
+  }
+  .explorer-side a {
+    color: #7070c0; font-size: 11px; text-decoration: none;
+    padding: 4px 8px; border-radius: 4px;
+  }
+  .explorer-side a:hover { background: #16213e; color: #a0a0f0; }
+  .explorer-body { flex: 1; overflow-y: auto; overflow-x: hidden; }
+</style>
+
+<div class="explorer">
+  <div class="explorer-bar">
+    <h1>{title}</h1>
+    <div class="filters" id="filters">
+      <button class="tb active" data-kind="">All</button>
+      {kinds.map(function (k) {
+        return <button class="tb" data-kind={k}>{k}</button>;
+      })}
+    </div>
+  </div>
+
+  <div class="explorer-main">
+    <div class="explorer-side">
+      {links.map(function (link) {
+        return <a href={link.href}>{link.label}</a>;
+      })}
+    </div>
+
+    <div class="explorer-body">
+      <slot />
+    </div>
+  </div>
+</div>
+
+<script>
+  var filters = document.getElementById("filters");
+  if (filters) {
+    filters.addEventListener("click", function (e) {
+      var btn = (e.target as HTMLElement).closest("button");
+      if (!btn) return;
+      var kind = btn.dataset.kind || "";
+      filters.querySelectorAll("button").forEach(function (b) { b.classList.remove("active"); });
+      btn.classList.add("active");
+
+      var body = document.querySelector(".explorer-body");
+      if (!body) return;
+      body.querySelectorAll(".card").forEach(function (card) {
+        (card as HTMLElement).style.display = !kind || card.getAttribute("data-kind") === kind ? "" : "none";
+      });
+    });
+  }
+</script>

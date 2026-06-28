@@ -127,6 +127,25 @@ function mediaFromCaches(url: string, caches: readonly Cache[]): Media | undefin
   return undefined;
 }
 
+/** Decode one NDJSON line into a result object.
+ *
+ *  Supports two formats:
+ *  - Raw: `{"url":"...","status":"success",...}` — the entire object is the result.
+ *  - Envelope: `{"type":"item.result","index":0,"result":{...}}` — the `result` field is extracted.
+ *  Returns null if the line doesn't look like a valid result.
+ */
+function parseBatchLine(parsed: Record<string, unknown>): Record<string, unknown> | null {
+  // Envelope format (legacy tier1 server): extract the result.
+  if (typeof parsed.type === "string" && parsed.result && typeof parsed.result === "object") {
+    return parsed.result as Record<string, unknown>;
+  }
+  // Raw format: the whole object is the result.
+  if (typeof parsed.url === "string" && typeof parsed.status === "string") {
+    return parsed;
+  }
+  return null;
+}
+
 function resultFromServer(
   item: Record<string, unknown>,
   caches: readonly Cache[],
@@ -275,11 +294,31 @@ export class Client {
    * @throws {VerifyError} if the server is unreachable or misconfigured.
    */
   async verify(): Promise<this> {
-    const path = this.baseUrl === DEFAULT_BASE ? "/token" : "/health";
-    const resp = await this.request("GET", path);
-    const data = (await resp.json()) as { status?: string };
+    const resp = await this.request("GET", "/health");
+    if (!resp.ok) {
+      const statusText = resp.statusText ? ` ${resp.statusText.toLowerCase()}` : "";
+      throw new VerifyError(
+        `Connect server not responding (${resp.status}${statusText})`,
+      );
+    }
+    let data: { status?: string; thumbrella?: number; token?: boolean };
+    try {
+      data = (await resp.json()) as { status?: string; thumbrella?: number; token?: boolean };
+    } catch {
+      throw new VerifyError("Connect is not a thumbrella server");
+    }
+    if (data?.thumbrella === undefined) {
+      throw new VerifyError("Connect is not a thumbrella server");
+    }
     if (data?.status !== "ok") {
-      throw new VerifyError(`unexpected response: ${JSON.stringify(data)}`);
+      throw new VerifyError(`Connect unexpected response: ${JSON.stringify(data)}`);
+    }
+    if (data?.token === false) {
+      throw new VerifyError(
+        this.headers.Authorization
+          ? "Thumbrella connect invalid token"
+          : "Thumbrella connect requires a token",
+      );
     }
     return this;
   }
@@ -398,16 +437,11 @@ export class Client {
           const trimmed = line.trim();
           if (!trimmed) continue;
           try {
-            const envelope = JSON.parse(trimmed) as Record<string, unknown>;
-            const kind = envelope.type as string | undefined;
-            const resultData = envelope.result as Record<string, unknown> | undefined;
-            if (!resultData || (kind !== "item.intermediate" && kind !== "item.result")) {
-              continue;
-            }
+            const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+            const resultData = parseBatchLine(parsed);
+            if (!resultData) continue;
             const itemUrl = resultData.url as string | undefined;
-            if (itemUrl && kind === "item.result") {
-              pending.delete(itemUrl);
-            }
+            if (itemUrl) pending.delete(itemUrl);
             yield resultFromServer(resultData, this.caches, this.baseUrl);
           } catch {
             // skip malformed lines
@@ -416,9 +450,9 @@ export class Client {
       }
       if (buffer.trim()) {
         try {
-          const envelope = JSON.parse(buffer.trim());
-          const resultData = envelope.result as Record<string, unknown> | undefined;
-          if (resultData && (envelope.type === "item.intermediate" || envelope.type === "item.result")) {
+          const parsed = JSON.parse(buffer.trim());
+          const resultData = parseBatchLine(parsed);
+          if (resultData) {
             const itemUrl = resultData.url as string | undefined;
             if (itemUrl) pending.delete(itemUrl);
             yield resultFromServer(resultData, this.caches, this.baseUrl);

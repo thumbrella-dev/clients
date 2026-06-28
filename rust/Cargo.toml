@@ -1,9 +1,15 @@
 [package]
 name = "thumbrella"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
-description = "Rust client for the Thumbrella HTTP API"
+description = "Rust client for the Thumbrella thumbnail API — typed results, async streaming, pluggable caching"
 license = "Apache-2.0"
+repository = "https://github.com/thumbrella-dev/thumbrella-clients"
+homepage = "https://thumbrella.dev/docs/client"
+documentation = "https://docs.rs/thumbrella"
+keywords = ["thumbrella", "thumbnail", "thumbnails", "image", "media", "streaming"]
+categories = ["api-bindings", "multimedia::images", "web-programming::http-client"]
+readme = "README.md"
 
 [dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }

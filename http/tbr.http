@@ -1,0 +1,36 @@
+# Pick a custom host url, or put in your own private key, or use the demo site
+#@host = https://api.thumbrella.dev   # Main online service, needs auth token
+@host = https://demo.thumbrella.dev   # Demo server, free requests to demo site media
+#@host = http://localhost:3114
+
+@token = none
+#@token = tbr_e_oQftPlhB6ulGkdu5lILXKZBM  # (example token)
+
+
+### Server check (and token check for main online server)
+GET {{host}}/health
+Authorization: Bearer {{token}}
+
+
+### Thumbnail - simplistic get lookup
+GET {{host}}/thumb.jpeg?url=https://demo.thumbrella.dev/media/space-colony.jpg
+Authorization: Bearer {{token}}
+
+
+### Batch (single)
+POST http://localhost:3114/batch
+Content-Type: application/json
+
+{"items":[{"url":"https://demo.thumbrella.dev/media/miss-library.avif"}]}
+
+
+### Stream (double)
+POST {{host}}/batch
+Authorization: Bearer {{token}}
+Content-Type: application/json
+Accept: application/ndjson
+
+{"items":[
+  {"url":"https://demo.thumbrella.dev/media/harbor-trucks.mp4"}, 
+  {"url":"https://demo.thumbrella.dev/media/golden-gate.exr"}]
+}

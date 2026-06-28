@@ -102,28 +102,31 @@ class Client:
         Raises:
             VerifyError: if the server is unreachable or misconfigured.
         """
-        if self.base_url == DEFAULT_BASE:
-            path = "/token"
-            key = "token_type"
-        else:
-            path = "/health"
-            key = "status"
-
         try:
             data = requests_json(
-                self.session, self.host_name, self.base_url, "GET", path
+                self.session, self.host_name, self.base_url, "GET", "/health",
             )
         except (ConnectionError, TimeoutError) as exc:
             raise VerifyError(
-                f"could not reach server at {self.base_url}"
+                "connect server not responding"
             ) from exc
+        except ValueError:
+            # Non-JSON response — the server at the other end isn't thumbrella.
+            raise VerifyError("connect is not a thumbrella server") from None
         except requests.RequestException as exc:
             raise VerifyError(
-                f"server at {self.base_url}: {exc}"
+                f"connect server not responding ({exc})"
             ) from exc
 
-        if not data.get(key):
-            raise VerifyError(f"unexpected response: {data}")
+        if "thumbrella" not in data:
+            raise VerifyError("connect is not a thumbrella server")
+        if data.get("status") != "ok":
+            raise VerifyError(f"connect unexpected response: {data}")
+        if data.get("token") is False:
+            if "Authorization" in self.session.headers:
+                raise VerifyError("thumbrella connect invalid token")
+            else:
+                raise VerifyError("thumbrella connect requires a token")
         return self
 
     def thumb(self, url: str) -> Result:

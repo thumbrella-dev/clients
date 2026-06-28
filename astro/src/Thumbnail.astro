@@ -1,52 +1,107 @@
 ---
-// Thumbnail.astro — drop-in <img> replacement.  Renders a lightweight
-// SVG placeholder that the page coordinator replaces with the real
-// JPEG once the batch streaming request completes.
+// Thumbnail.astro - Show a thumbnail for any media.
 //
-// Requires a <Thumbrella> component on the page (usually in your layout).
-// Without one, thumbnails show the placeholder indefinitely.
-//
-// Thumbnails are always loaded client-side.  For server-side generation
-// (SSR / static build), use @thumbrella/client directly in frontmatter.
+// Thumbnail components are intended to be grouped inside a Thumbrella
+// component. This allows them to share configuration and be handled in
+// streaming batches, instead of individually. The thumbnails are not
+// required to be immediately children.
+// 
+// Longer rendering thumbnails will show temporarily use placeholder images
+// until finished. Every thumbnail component will show an image, even if
+// configuration completely fails or the server cannot be reached. 
 
 interface Props {
   /** Media URL to thumbnail. */
   src: string;
-  /** Show the file kind as a CSS class (for badge overlays). */
-  showKind?: boolean;
-  /** Show the cache source as a CSS class. */
-  showSource?: boolean;
-  /** Alt text for the image. */
+  /** Alt text. */
   alt?: string;
-  /** CSS class(es) for the wrapper / img element. */
+  /** CSS class(es). */
   class?: string;
+  /** Override parent Thumbrella lazy-load setting for this item. */
+  lazyLoad?: boolean;
 }
 
-const {
-  src,
-  showKind = true,
-  showSource = false,
-  alt = "",
-  class: className = "",
-} = Astro.props as Props;
+const { src, alt = "", class: className = "", lazyLoad } = Astro.props;
 
-// Build class list for the element.
-const classes = ["tbr-thumb", className].filter(Boolean).join(" ");
-// Data attributes that control CSS class injection.
-const dataAttrs: Record<string, string> = {
-  "data-tbr-url": src,
-};
-if (showKind) dataAttrs["data-tbr-kind"] = "";
-if (showSource) dataAttrs["data-tbr-source"] = "";
+const placeholder = "data:image/svg+xml," + encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 3"><rect fill="#e0e0e0" width="4" height="3"/></svg>`,
+);
 ---
 
-<img
-  { ...dataAttrs }
-  class={classes}
-  src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='250' height='200' viewBox='0 0 250 200'%3E%3Crect fill='%23f0f0f0' width='250' height='200'/%3E%3C/svg%3E"
-  alt={alt}
-  width="250"
-  height="200"
-  loading="lazy"
-  decoding="async"
-/>
+<div
+  class={`tbr-wrap ${className}`.trim() || undefined}
+  data-tbr-url={src}
+  data-tbr-lazy={lazyLoad != null ? String(lazyLoad) : undefined}
+>
+  <img
+    class="tbr-placeholder"
+    src={placeholder}
+    alt={alt}
+    loading="lazy"
+    decoding="async"
+  />
+  <img
+    class="tbr-final"
+    src=""
+    alt=""
+    loading="lazy"
+    decoding="async"
+  />
+  <div class="tbr-spinner" aria-hidden="true"></div>
+</div>
+
+<style>
+  .tbr-wrap {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    background: #0d1225;
+    overflow: hidden;
+  }
+  .tbr-wrap img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .tbr-final {
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }
+  .tbr-loaded .tbr-final {
+    opacity: 1;
+  }
+
+  .tbr-spinner {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+    z-index: 2;
+  }
+  .tbr-spinner::after {
+    content: "";
+    width: 22px;
+    height: 22px;
+    border: 3px solid #1e2d50;
+    border-top-color: #e94560;
+    border-radius: 50%;
+    animation: tbr-spin 0.8s linear infinite;
+  }
+  @keyframes tbr-spin {
+    to { transform: rotate(360deg); }
+  }
+  .tbr-requested .tbr-spinner,
+  .tbr-intermediate .tbr-spinner {
+    opacity: 1;
+  }
+  .tbr-loaded .tbr-spinner {
+    opacity: 0;
+  }
+</style>
