@@ -9,7 +9,7 @@
  *                            [--full] [--warmup] [--json] [--label <name>]
  *
  * <connect> is an optional positional connect string (default: $TBR_CONNECT or
- * https://api.thumbrella.dev).  Fetches the demo index to get media URLs, then
+ * https://cloud.thumbrella.dev).  Fetches the demo index to get media URLs, then
  * sends batch requests through the Client.  Verifies the server before starting.
  *
  * --warmup runs one silent pass over all URLs before the timed benchmark, to
@@ -69,7 +69,7 @@ function parseArgs(): Options {
       case "--help":
       case "-h":
         console.log(`Usage: bench.ts [<connect>] [--batch <n>] [--rounds <n>] [--full] [--warmup] [--json] [--label <name>]`);
-        console.log(`  <connect>   Connect string (default: env TBR_CONNECT or https://api.thumbrella.dev)`);
+        console.log(`  <connect>   Connect string (default: env TBR_CONNECT or https://cloud.thumbrella.dev)`);
         console.log(`  --batch     Number of URLs per batch request (default: 5)`);
         console.log(`  --rounds    Number of times to repeat the full set (default: 1)`);
         console.log(`  --full      Print per-item timing using server-reported duration`);

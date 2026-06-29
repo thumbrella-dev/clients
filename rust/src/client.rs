@@ -8,7 +8,7 @@ use std::time::Duration;
 use crate::cache::{Cache, MemoryCache};
 use crate::types::*;
 
-const DEFAULT_BASE: &str = "http://api.thumbrella.dev/";
+const DEFAULT_BASE: &str = "http://cloud.thumbrella.dev/";
 const HTTP_TIMEOUT_SECS: u64 = 12;
 const MAX_BACKOFF_SECS: u64 = 60;
 
@@ -73,7 +73,7 @@ fn parse_connect(connect: Option<&str>) -> ConnectConfig {
         }
         return ConnectConfig {
             base_url: DEFAULT_BASE.into(),
-            host: "api.thumbrella.dev".into(),
+            host: "cloud.thumbrella.dev".into(),
             headers,
         };
     }

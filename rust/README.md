@@ -7,7 +7,7 @@ handles images, video, documents, vector graphics, 3D models, and more.
 [![docs.rs](https://img.shields.io/docsrs/thumbrella)](https://docs.rs/thumbrella)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
-Thumbrella servers can be self-hosted or used as a cloud service. This crate
+Thumbrella servers can be self-hosted or used as Thumbrella Cloud. This crate
 wraps the HTTP API with typed results, streaming NDJSON batches, pluggable
 caching, and a connect-string system that works the same way across local dev,
 CI, and production.
@@ -101,7 +101,7 @@ The client reads `$TBR_CONNECT` by default. Pass `Some("...")` to override:
 Client::new(Some("http://localhost:3114"));
 
 // Cloud service with auth token
-Client::new(Some("https://api.thumbrella.dev,tbr_e_oQftPlhB6ulGkdu5lILXKZBM"));
+Client::new(Some("https://cloud.thumbrella.dev,tbr_e_oQftPlhB6ulGkdu5lILXKZBM"));
 
 // Custom server with handshake value
 Client::new(Some("https://my-server.example.com,my-handshake"));
@@ -204,10 +204,10 @@ See [`examples/`](./examples) for full source.
 
 ## Where To Go Next
 
-- [Full client documentation](https://thumbrella.dev/docs/client)
+- [Full client documentation](https://thumbrella.dev/docs/client/)
 - [Thumbrella main site](https://thumbrella.dev)
 - [Rust API reference (docs.rs)](https://docs.rs/thumbrella)
-- [GitHub repository](https://github.com/thumbrella-dev/thumbrella-clients)
+- [GitHub repository](https://github.com/thumbrella-dev/clients)
 
 ## License
 

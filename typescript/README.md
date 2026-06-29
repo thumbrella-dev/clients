@@ -6,7 +6,7 @@ handles images, video, documents, vector graphics, 3D models, and more.
 [![npm version](https://img.shields.io/npm/v/@thumbrella/client)](https://www.npmjs.com/package/@thumbrella/client)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
-Thumbrella servers can be self-hosted or used as a cloud service. This package
+Thumbrella servers can be self-hosted or used as Thumbrella Cloud. This package
 wraps the HTTP API with typed results, streaming batches, pluggable
 caching, and a connect-string system that works the same way across local dev,
 CI, and production.
@@ -69,7 +69,7 @@ The client reads `$TBR_CONNECT` by default. Pass a connect string to override:
 new Client({ connect: "http://localhost:3114" });
 
 // Cloud service with auth token
-new Client({ connect: "https://api.thumbrella.dev,tbr_e_oQftPlhB6ulGkdu5lILXKZBM" });
+new Client({ connect: "https://cloud.thumbrella.dev,tbr_e_oQftPlhB6ulGkdu5lILXKZBM" });
 
 // Custom server with handshake value
 new Client({ connect: "https://my-server.example.com,my-handshake" });
@@ -179,10 +179,9 @@ Source at [`src/bin/file.ts`](./src/bin/file.ts).
 
 ## Where To Go Next
 
-- [Full client documentation](https://thumbrella.dev/docs/client)
+- [Full client documentation](https://thumbrella.dev/docs/client/)
 - [Thumbrella main site](https://thumbrella.dev)
-- [TypeScript API reference](https://thumbrella.dev/docs/client/typescript)
-- [GitHub repository](https://github.com/thumbrella-dev/thumbrella-clients)
+- [GitHub repository](https://github.com/thumbrella-dev/clients)
 
 ## License
 

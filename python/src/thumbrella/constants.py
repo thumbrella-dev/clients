@@ -1,7 +1,7 @@
 """Status and type constants — string-based for cross-language portability."""
 
 
-DEFAULT_BASE = "http://api.thumbrella.dev/"
+DEFAULT_BASE = "http://cloud.thumbrella.dev/"
 
 MAX_BACKOFF = 60.0
 

@@ -1,7 +1,7 @@
 """Thumbrella - fast thumbnails for online media.
 
 Thumbrella is an online thumbnailing service. It is easy to self host or run
-self hosted servers or use existing online cloud services. Learn more at
+self hosted servers or use Thumbrella Cloud. Learn more at
 https://thumbrella.dev
 
 This Python client makes it simple and efficient to access the thumbnailer.

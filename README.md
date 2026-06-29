@@ -3,16 +3,19 @@
 Official client libraries for the [Thumbrella](https://thumbrella.dev) thumbnail
 API. Apache-2.0 licensed. Lightweight, typed, and easy to integrate.
 
-Thumbrella generates thumbnails for images, video, documents, vector graphics,
-3D models, and more. These clients wrap the HTTP API with language-idiomatic
-interfaces: failure handling, typed results, streaming batches, and persistable
-caching.
+Thumbrella is the open source server for online thumbnails.
+Serve fast, cached thumbnails from over 100 formats: photographs, videos,
+documents, even 3D models. Feed it your media libraries and get reliable
+thumbnail back.
 
-Thumbrella servers can be self hosted. These libraries make connecting to
-custom servers as simple as the main hosted service.
+One command runs it locally or in Docker. Our Thumbrella Cloud is efficient enough
+to offer a genuinely useful free tier.
+
+Start with client the packages for languages you already use. Docs and examples
+get you streaming thumbnails immediately.
 
 The full documentation for clients is on the main Thumbrella website,
-[thumbrella.dev/docs/client](https://thumbrella.dev/docs/client).
+[thumbrella.dev/docs/client/](https://thumbrella.dev/docs/client/).
 
 ## Packages
 
@@ -99,7 +102,7 @@ constructor.
 # Local dev server (no auth)
 http://localhost:3114
 
-# Online service uses an authentication token
+# Thumbrella Cloud uses an authentication token
 tbr_e_oQftPlhB6ulGkdu5lILXKZBM      (example)
 ```
 

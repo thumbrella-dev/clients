@@ -38,7 +38,7 @@ def parse_connect(
             session.headers["Authorization"] = f"Bearer {connect}"
         else:
             session.headers["x-tbr-handshake"] = connect
-        return DEFAULT_BASE, "api.thumbrella.dev:0"
+        return DEFAULT_BASE, "cloud.thumbrella.dev:0"
 
     segments = connect.split(",")
     server = segments[0].strip()

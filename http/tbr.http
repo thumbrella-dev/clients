@@ -1,5 +1,5 @@
 # Pick a custom host url, or put in your own private key, or use the demo site
-#@host = https://api.thumbrella.dev   # Main online service, needs auth token
+#@host = https://cloud.thumbrella.dev   # Main online service, needs auth token
 @host = https://demo.thumbrella.dev   # Demo server, free requests to demo site media
 #@host = http://localhost:3114
 

@@ -1,5 +1,5 @@
 /**
- * file-share.ts — thumbnail a local file using the public Thumbrella cloud.
+ * file-share.ts — thumbnail a local file using Thumbrella Cloud.
  *
  * Two modes (controlled by the --tunnel flag):
  *

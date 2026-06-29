@@ -1,6 +1,6 @@
 {
   "name": "@thumbrella/client",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "TypeScript client for the Thumbrella thumbnail API - typed results, streaming batches, pluggable caching",
   "type": "module",
   "main": "dist/index.js",
