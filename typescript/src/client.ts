@@ -152,7 +152,8 @@ function resultFromServer(
   serverKey: string,
 ): Result {
   const source = item.source as string | undefined;
-  const placeholder = item.placeholder as string | undefined;
+  const mediaRaw = item.media as Record<string, unknown> | undefined;
+  const placeholder = (mediaRaw?.placeholder as string) || "";
 
   if (source === Source.NOT_MODIFIED) {
     const url = (item.url as string) ?? "";
@@ -166,7 +167,6 @@ function resultFromServer(
   }
 
   if (placeholder) {
-    const mediaRaw = item.media as Record<string, unknown> | undefined;
     const thumbB64 = (mediaRaw?.thumbnail as string) ?? "";
     const thumb = placeholderThumb(serverKey, placeholder, thumbB64);
     const media = new Media(mediaRaw ?? {});

@@ -190,13 +190,15 @@ pub struct Media {
     #[serde(default)]
     pub properties: serde_json::Value,
     #[serde(default)]
-    pub cache: Option<String>,
+    pub cache: String,
+    #[serde(default)]
+    pub placeholder: String,
 }
 
 impl Media {
     pub fn is_fresh(&self) -> bool {
-        if let Some(ref cache) = self.cache {
-            if let Some((epoch_hex, _)) = cache.split_once(':') {
+        if !self.cache.is_empty() {
+            if let Some((epoch_hex, _)) = self.cache.split_once(':') {
                 if let Ok(expires) = u64::from_str_radix(epoch_hex, 16) {
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -247,7 +249,7 @@ pub struct ResultData {
     #[serde(default)]
     pub message: Option<String>,
     #[serde(default)]
-    pub placeholder: Option<String>,
+    pub http_status: Option<u16>,
     #[serde(default)]
     pub source: Option<String>,
     #[serde(default)]
@@ -265,7 +267,7 @@ impl ResultData {
             duration: 0.0,
             download_size: 0,
             message: None,
-            placeholder: None,
+            http_status: None,
             source: Some(source::CLIENT.to_string()),
             media: None,
             raw: serde_json::Value::Null,

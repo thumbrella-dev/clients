@@ -149,7 +149,8 @@ export class Media {
   kind: string;
   extension: string;
   properties: Record<string, number>;
-  cache: string | null;
+  cache: string;
+  placeholder: string;
 
   constructor(data: Record<string, unknown>) {
     this.url = (data.url as string) ?? "";
@@ -158,7 +159,8 @@ export class Media {
     this.kind = (data.kind as string) ?? FileKind.UNKNOWN;
     this.extension = (data.extension as string) ?? "";
     this.properties = (data.properties as Record<string, number>) ?? {};
-    this.cache = (data.cache as string) ?? null;
+    this.cache = (data.cache as string) ?? "";
+    this.placeholder = (data.placeholder as string) ?? "";
 
     const thumb = data.thumbnail as string | undefined;
     this.thumbnail = thumb
@@ -224,7 +226,7 @@ export class Result {
   source: string | null;
   duration: number;
   downloadSize: number;
-  placeholder: string | null;
+  httpStatus: number | null;
   media: Media | null;
   raw: Record<string, unknown>;
 
@@ -235,7 +237,7 @@ export class Result {
     this.source = (data.source as string) ?? null;
     this.duration = (data.duration as number) ?? 0;
     this.downloadSize = (data.download_size as number) ?? 0;
-    this.placeholder = (data.placeholder as string) ?? null;
+    this.httpStatus = (data.http_status as number) ?? null;
     this.raw = data;
 
     const mediaRaw = data.media as Record<string, unknown> | undefined;

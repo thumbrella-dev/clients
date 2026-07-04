@@ -56,8 +56,8 @@ class Result:
 
     """
     __slots__ = (
-        "url", "status", "message", "source", "duration", "download_size", 
-        "placeholder", "media", "raw", "__weakref__",    
+        "url", "status", "message", "source", "duration", "download_size",
+        "http_status", "media", "raw", "__weakref__",
     )
 
     def __init__(
@@ -74,7 +74,7 @@ class Result:
         self.source: str | None = data.get("source", Source.CLIENT)
         self.duration: float = float(data.get("duration", 0.0))
         self.download_size: int = int(data.get("download_size", 0))
-        self.placeholder: str | None = data.get("placeholder")
+        self.http_status: int | None = data.get("http_status")
         self.media: Media | None = media
         self.raw: dict[str, Any] = data
         if not media:
@@ -130,11 +130,12 @@ class Media:
     The attributes are mostly mandatory. If the result has a ``media``
     attribute, then these fields will exist.
 
-    The ``properties`` represent optional and additional informatio 
+    The ``properties`` represent optional and additional information
     Thumbrella provides to describe the media. Each ``kind`` has a different
     schema for what could be included in the properties. For example, images
-    will come with ``width_pixels``, ``height_pixels`` and ``color_bpp``.
-    But these properties are still optional and may not always be included.
+    will come with ``width``, ``height``, ``bpp``, ``alpha``, and
+    ``lossless``. But these properties are still optional and may not always
+    be included.
     
     Stable media identity — reusable, cacheable, hashable by content.
 
@@ -150,7 +151,7 @@ class Media:
    """
 
     __slots__ = ("url", "thumbnail", "mime", "file_size", "kind",
-                 "extension", "properties", "cache", "__weakref__")
+                 "extension", "properties", "cache", "placeholder", "__weakref__")
 
     def __init__(
         self,
@@ -164,7 +165,8 @@ class Media:
         self.kind: str = data.get("kind", FileKind.UNKNOWN)
         self.extension: str = data.get("extension", "")
         self.mime: str = data.get("mime", "application/octet-stream")
-        self.properties: dict[str, int | float] = data.get("properties", {})
+        self.placeholder: str = data.get("placeholder", "")
+        self.properties: dict[str, Any] = data.get("properties", {})
         if thumbnail:
             self.thumbnail: EncodedJpeg = thumbnail
         else:
