@@ -13,16 +13,16 @@
     }
   },
   "bin": {
-    "thumbrella-file": "./dist/bin/file.js"
+    "thumbrella-file": "dist/bin/file.js"
   },
   "files": [
     "dist/",
-    "README.md",
-    "LICENSE"
+    "README.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "bench": "tsx scripts/bench.ts"
+    "bench": "npx tsx scripts/bench.ts",
+    "example": "npx tsx"
   },
   "keywords": [
     "thumbrella",
@@ -34,20 +34,22 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/thumbrella-dev/thumbrella-clients.git",
+    "url": "git+https://github.com/thumbrella-dev/clients.git",
     "directory": "typescript"
   },
-  "homepage": "https://thumbrella.dev/",
+  "homepage": "https://thumbrella.dev",
   "bugs": {
-    "url": "https://github.com/thumbrella-dev/thumbrella-clients/issues"
+    "url": "https://github.com/thumbrella-dev/clients/issues"
   },
   "license": "Apache-2.0",
+  "sideEffects": false,
   "engines": {
     "node": ">=18"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
     "dotenv": "^16.4.5",
+    "tsx": "^4.23.0",
     "typescript": "^5.6.3"
   }
 }

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-// ── status constants ─────────────────────────────────────────────────────
+//  status constants
 
 pub mod status {
     pub const SUCCESS: &str = "success";
@@ -16,7 +16,7 @@ pub mod status {
     pub const UNAVAILABLE: &str = "unavailable";
 }
 
-// ── source constants ─────────────────────────────────────────────────────
+//  source constants
 
 pub mod source {
     pub const RENDER: &str = "render";
@@ -32,7 +32,7 @@ pub mod source {
     pub const CLIENT: &str = "client";
 }
 
-// ── errors ───────────────────────────────────────────────────────────────
+//  errors
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -52,7 +52,7 @@ pub enum Error {
     Http(u16, String),
 }
 
-// ── Thumbnail ────────────────────────────────────────────────────────────
+//  Thumbnail 
 
 /// Binary JPEG thumbnail data.
 ///
@@ -133,9 +133,7 @@ impl From<Vec<u8>> for Thumbnail {
 impl From<String> for Thumbnail {
     fn from(b64: String) -> Self {
         base64::engine::general_purpose::STANDARD
-            .decode(&b64)
-            .map(Vec::from)
-            .unwrap_or_default()
+            .decode(&b64).unwrap_or_default()
             .into()
     }
 }
@@ -158,7 +156,7 @@ impl std::fmt::Debug for Thumbnail {
     }
 }
 
-// ── Media ────────────────────────────────────────────────────────────────
+//  Media 
 
 /// Data from the [`ResultData`] that describes the source media.
 ///
@@ -197,22 +195,20 @@ pub struct Media {
 
 impl Media {
     pub fn is_fresh(&self) -> bool {
-        if !self.cache.is_empty() {
-            if let Some((epoch_hex, _)) = self.cache.split_once(':') {
-                if let Ok(expires) = u64::from_str_radix(epoch_hex, 16) {
+        if !self.cache.is_empty()
+            && let Some((epoch_hex, _)) = self.cache.split_once(':')
+                && let Ok(expires) = u64::from_str_radix(epoch_hex, 16) {
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_secs())
                         .unwrap_or(0);
                     return expires > 0 && expires > now;
                 }
-            }
-        }
         false
     }
 }
 
-// ── Result ───────────────────────────────────────────────────────────────
+//  Result
 
 /// Result for every URL.
 ///
@@ -275,7 +271,7 @@ impl ResultData {
     }
 
     pub fn is_fresh(&self) -> bool {
-        self.media.as_ref().map_or(false, |m| m.is_fresh())
+        self.media.as_ref().is_some_and(|m| m.is_fresh())
     }
 
     pub fn is_success(&self) -> bool {
@@ -289,7 +285,7 @@ impl ResultData {
     }
 }
 
-// ── Wire helpers ─────────────────────────────────────────────────────────
+//  Wire helpers
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct BatchResponse {

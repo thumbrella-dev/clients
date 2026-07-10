@@ -9,7 +9,7 @@
 
 import { Client, Status } from "@thumbrella/client";
 
-// ── helpers ────────────────────────────────────────────────────────────
+//  helpers 
 
 interface ResultLike {
   status: string;
@@ -93,7 +93,7 @@ function shouldLazy(el: HTMLElement, parentLazy: boolean): boolean {
   return parentLazy;
 }
 
-// ── public API ─────────────────────────────────────────────────────────
+//  public API
 
 let _initCount = 0;
 

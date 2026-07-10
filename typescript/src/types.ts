@@ -41,13 +41,13 @@ export const FileKind = {
 } as const;
 export type FileKind = (typeof FileKind)[keyof typeof FileKind];
 
-// ── EncodedJpeg ──────────────────────────────────────────────────────────
+//  EncodedJpeg 
 
 /**
  * Binary JPEG thumbnail data.
  *
  * This is the value for the `media.thumbnail` attribute. It can be shared
- * across multiple medias to make placeholder images more efficient.
+ * across multiple Media objects to make placeholder images more efficient.
  *
  * This represents the encoded JPEG data stream. It does not represent pixel
  * or image data itself.
@@ -112,7 +112,7 @@ export class EncodedJpeg {
   }
 }
 
-// ── Media ────────────────────────────────────────────────────────────────
+//  Media 
 
 /**
  * Data from the {@link Result} that describes the source media.
@@ -177,7 +177,7 @@ export class Media {
   }
 }
 
-// ── Result ───────────────────────────────────────────────────────────────
+//  Result
 
 /**
  * Result for every URL.
@@ -270,7 +270,7 @@ export class Result {
   }
 }
 
-// ── Errors ───────────────────────────────────────────────────────────────
+//  Errors
 
 export class ThumbError extends Error {
   constructor(message: string) {

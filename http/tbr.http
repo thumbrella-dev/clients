@@ -18,7 +18,7 @@ Authorization: Bearer {{token}}
 
 
 ### Batch (single)
-POST http://localhost:3114/batch
+POST {{host}}/batch
 Content-Type: application/json
 
 {"items":[{"url":"https://demo.thumbrella.dev/media/miss-library.avif"}]}

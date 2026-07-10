@@ -12,13 +12,13 @@ import {
   TimeoutError,
 } from "./types.js";
 
-// ── constants ────────────────────────────────────────────────────────────
+//  constants 
 
-const DEFAULT_BASE = "http://cloud.thumbrella.dev/";
+const DEFAULT_BASE = "https://cloud.thumbrella.dev/";
 const MAX_BACKOFF_MS = 60_000;
 const HTTP_TIMEOUT_MS = 12_000;
 
-// ── global backoff ───────────────────────────────────────────────────────
+//  global backoff
 
 const _backoff = new Map<string, { until: number; failures: number }>();
 
@@ -40,14 +40,14 @@ function recordBackoff(host: string, throttled: boolean): void {
   }
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────
+//  helpers
 
 /** True when a value looks like a Thumbrella auth token (`tbr_[a-z]_` prefix). */
 function isAuthToken(s: string): boolean {
   return /^tbr_[a-z]_/.test(s);
 }
 
-// ── connect string parsing ───────────────────────────────────────────────
+//  connect string parsing
 
 interface ConnectConfig {
   baseUrl: string;
@@ -96,7 +96,7 @@ export function parseConnect(connect?: string): ConnectConfig {
   return { baseUrl: urlPart.replace(/\/+$/, ""), headers };
 }
 
-// ── placeholder cache ────────────────────────────────────────────────────
+//  placeholder cache 
 
 const placeholderCache = new Map<string, Map<string, EncodedJpeg>>();
 
@@ -117,7 +117,7 @@ function placeholderThumb(
   return blob;
 }
 
-// ── result construction ──────────────────────────────────────────────────
+//  result construction 
 
 function mediaFromCaches(url: string, caches: readonly Cache[]): Media | undefined {
   for (const cache of caches) {
@@ -182,7 +182,7 @@ function resultFromServer(
   return r;
 }
 
-// ── preflight ────────────────────────────────────────────────────────────
+//  preflight 
 
 function preflightUrls(
   urls: string[],
@@ -227,7 +227,7 @@ function preflightUrls(
   return { done, stale };
 }
 
-// ── client ────────────────────────────────────────────────────────────────
+//  client 
 
 /**
  * Thumbrella API client.
@@ -274,7 +274,7 @@ export class Client {
       : opts?.caches ?? [];
   }
 
-  // ── public API ──────────────────────────────────────────────────────────
+  //  public API 
 
   /**
    * Check configuration and server connectivity.
@@ -472,7 +472,7 @@ export class Client {
     }
   }
 
-  // ── HTTP ────────────────────────────────────────────────────────────────
+  //  HTTP 
 
   async request(
     method: string,

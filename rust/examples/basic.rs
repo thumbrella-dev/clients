@@ -5,7 +5,7 @@
 
 use std::env;
 use std::fs;
-use thumbrella::Client;
+use thumbrella_client::Client;
 
 #[tokio::main]
 async fn main() {

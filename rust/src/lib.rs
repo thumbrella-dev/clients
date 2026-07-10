@@ -1,8 +1,8 @@
 //! Thumbrella Rust client — async-first thumbnail generation.
 //!
 //! ```no_run
-//! # async fn example() -> Result<(), thumbrella::Error> {
-//! let tbr = thumbrella::Client::new(None);
+//! # async fn example() -> Result<(), thumbrella_client::Error> {
+//! let tbr = thumbrella_client::Client::new(None);
 //! tbr.verify().await?;
 //! let result = tbr.thumb("https://example.com/photo.jpg").await?;
 //! if let Some(media) = &result.media {

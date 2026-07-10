@@ -22,7 +22,7 @@ import type { Server } from "node:http";
 import { randomBytes } from "node:crypto";
 import { Client } from "../src/index.js";
 
-// ── upload mode ─────────────────────────────────────────────────────────
+//  upload mode
 //
 // 0x0.st is a free, zero-auth file host.  One POST with FormData and you
 // get back a plain-text URL.  Swap this out for any service you prefer
@@ -45,7 +45,7 @@ async function upload(filePath: string): Promise<string> {
   return url;
 }
 
-// ── tunnel mode ─────────────────────────────────────────────────────────
+//  tunnel mode
 //
 // Instead of uploading the file somewhere, we serve it from localhost and
 // open a public tunnel.  Thumbrella makes HTTP range requests against the
@@ -95,7 +95,7 @@ function serveFile(filePath: string, port: number, secret: string): Server {
   }).listen(port, "127.0.0.1");
 }
 
-// ── thumbnail + save (shared) ───────────────────────────────────────────
+//  thumbnail + save (shared)
 
 async function thumbnailAndSave(publicUrl: string, outputAbs: string): Promise<void> {
   const tbr = await new Client().verify();
@@ -117,7 +117,7 @@ async function thumbnailAndSave(publicUrl: string, outputAbs: string): Promise<v
   console.error(`  time   : ${result.duration?.toFixed(0) ?? "?"} ms`);
 }
 
-// ── main ────────────────────────────────────────────────────────────────
+//  main 
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
@@ -142,7 +142,7 @@ async function main(): Promise<void> {
   const kb = (fileBytes.length / 1024).toFixed(1);
 
   if (useTunnel) {
-    // ── tunnel mode ──────────────────────────────────────────────────
+    //  tunnel mode 
     const secret = randomBytes(12).toString("base64url");
     const server = serveFile(inputAbs, 0, secret);
     const addr = server.address();
@@ -162,7 +162,7 @@ async function main(): Promise<void> {
       server.close();
     }
   } else {
-    // ── upload mode ──────────────────────────────────────────────────
+    //  upload mode 
     console.error(`Uploading ${fileName} (${kb} KB) …`);
     const publicUrl = await upload(inputAbs);
     console.error(`Public URL: ${publicUrl}`);

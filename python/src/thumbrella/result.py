@@ -15,8 +15,8 @@ from .cache import is_cache_fresh
 class Result:
     """Result for every url.
 
-    The result describes the operation for every thumbnail url. It handled both
-    successed and failures. There are two levels of fields on the result.
+    The result describes the operation for every thumbnail url. It handles both
+    successes and failures. There are two levels of fields on the result.
     
     The top level ``url`` attribute contains the origin url the request was made
     for.
@@ -107,8 +107,8 @@ class Result:
 
         Failed results will still contain a placeholder thumbnail image.
 
-        This can be checked more lightwight by comparing
-        ``result.status == thumbrella.Status.SUCCEEDED``.
+        This can be checked more lightweight by comparing
+        ``result.status == thumbrella.Status.SUCCESS``.
         """
         from .errors import ThumbError
 
@@ -143,7 +143,7 @@ class Media:
     `EncodedJpeg` object that provides several conveniences for accessing
     the binary encoded image data. This thumbnail data can be shared across
     multiple instances of `Media` objects when it represents placeholder
-    iamges.
+    images.
 
     Media objects are only created from the `Client` object as part of
     a `Result`.
@@ -211,7 +211,7 @@ class EncodedJpeg:
     """Binary JPEG thumbnail data.
 
     This is the value for the ``Media.thumbnail`` attribute. It can be shared
-    across multiple medias to make placeholder images more efficient.
+    across multiple Media objects to make placeholder images more efficient.
 
     This represents the encoded jpeg data stream. It does not represent pixel or
     image data itself. It must be used with an image library that understands

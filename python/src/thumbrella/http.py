@@ -71,7 +71,7 @@ def requests_json(
     path: str,
     **kwargs: Any,
 ) -> Any:
-    """Manage blocking, syncronous http post through requests"""
+    """Manage blocking, synchronous http post through requests"""
     _check_backoff(host)
 
     url = base_url + path
@@ -99,7 +99,7 @@ async def aio_ndjson(
     path: str,
     **kwargs: Any,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Manage asyncronous streaming http post through aiiohttp"""
+    """Manage asynchronous streaming http post through aiohttp"""
     _check_backoff(host)
 
     url = base_url + path

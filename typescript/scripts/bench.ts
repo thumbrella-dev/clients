@@ -22,7 +22,7 @@
 // import { Client, Result, Status, Source } from "@thumbrella/client";
 import { Client, Result, Status, Source } from "../src/index.ts";
 
-// ── CLI parsing ──────────────────────────────────────────────────────────
+//  CLI parsing 
 
 interface Options {
   connect: string;
@@ -82,7 +82,7 @@ function parseArgs(): Options {
   return opts;
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────
+//  Helpers 
 
 const INDEX_URL = "https://demo.thumbrella.dev";
 
@@ -107,7 +107,7 @@ async function fetchIndex(): Promise<{ mediaTemplate: string; files: IndexEntry[
   return { mediaTemplate: index.media, files: index.files };
 }
 
-// ── Warmup ───────────────────────────────────────────────────────────────
+//  Warmup
 
 async function warmup(tbr: Client, urls: string[], batchSize: number): Promise<void> {
   if (!opts.warmup) return;
@@ -121,7 +121,7 @@ async function warmup(tbr: Client, urls: string[], batchSize: number): Promise<v
   process.stderr.write(" done\n");
 }
 
-// ── Main ─────────────────────────────────────────────────────────────────
+//  Main
 
 // Hold a module-level reference so warmup() can access opts.
 let opts: Options;
