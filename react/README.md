@@ -1,19 +1,17 @@
 # @thumbrella/react
 
-React components for [Thumbrella](https://thumbrella.dev) — a thumbnail API
-that handles images, video, documents, 3D models, and more.
+React components for [Thumbrella](https://thumbrella.dev), a fast thumbnail
+server for images, video, documents, and more.
 
 [![npm version](https://img.shields.io/npm/v/@thumbrella/react)](https://www.npmjs.com/package/@thumbrella/react)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](./LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/thumbrella-dev/clients/blob/main/LICENSE)
 
-Built on `@thumbrella/client`. Provides two components:
+> Thumbrella is still in prerelease. The server functionality is operational,
+> but several production components have yet to appear. Recommended for early
+> evaluation only.
 
-- **`<Thumbnail>`** — drop-in `<img>` replacement. Always renders an image,
-  even if the server is unreachable. Longer renders show a temporary
-  placeholder until the final thumbnail arrives.
-- **`<Thumbrella>`** — scoped coordinator. Group `<Thumbnail>` components
-  inside it and they share configuration, batch requests into a single
-  streaming call, and reuse identical placeholder images.
+Built on [`@thumbrella/client`](https://www.npmjs.com/package/@thumbrella/client).
+Drop-in components that batch requests and stream thumbnails into your page.
 
 ## Install
 
@@ -23,7 +21,7 @@ npm install @thumbrella/react
 
 Requires `react >= 18`.
 
-## Usage
+## Quickstart
 
 ```tsx
 import { Thumbnail, Thumbrella } from "@thumbrella/react";
@@ -39,53 +37,53 @@ function Gallery() {
 }
 ```
 
-Thumbnails don't need to be immediate children of `<Thumbrella>` — anywhere
-in the subtree works. New thumbnails added dynamically are picked up
-automatically via a `MutationObserver`.
+Thumbnails don't need to be immediate children of `<Thumbrella>` — anywhere in
+the subtree works. New thumbnails added dynamically are picked up automatically.
 
-### Connect strings
+### Connect Strings
 
 ```tsx
-{/* Public demo server (no auth needed) */}
+{/* Public demo server — no auth needed */}
 <Thumbrella connect="https://demo.thumbrella.dev">
 
-{/* Self-hosted server with an auth token */}
-<Thumbrella connect="tbr_e_YOURKEY">
+{/* Self-hosted with a publishable key */}
+<Thumbrella connect="https://cloud.thumbrella.dev,tbr_p_...">
 ```
 
-Use publishable keys in client-side code — they're visible to end users.
+Use publishable keys (`tbr_p_`) in client-side code — they're visible to end
+users and can be scoped to specific domains and quotas.
 
-### Lazy loading
+### Lazy Loading
 
 ```tsx
 <Thumbrella connect="..." lazyLoad>
-```
 
-Only loads thumbnails as they scroll into view. Override per element with
-`<Thumbnail lazyLoad={false} />`.
+<Thumbnail src="..." lazyLoad={false} />
+```
 
 ### Events
 
-Each thumbnail fires a `tbr:loaded` event with result data:
+Each thumbnail fires a `tbr:loaded` event when it finishes:
 
 ```tsx
-<div onTbrLoaded={(e) => console.log(e.detail.status)}>
-  <Thumbnail src="..." />
+<div onTbrLoaded={(e) => console.log(e.detail.status, e.detail.kind)}>
+  <Thumbnail src="https://demo.thumbrella.dev/media/raw-canon.cr2" />
 </div>
 ```
 
-The `detail` object contains `url`, `status`, `source`, `kind`, `duration`,
-`message`, `bytes`, and `placeholder`.
+## Servers
 
-## Demo
+Works with self-hosted Thumbrella servers and Thumbrella Cloud. Thumbrella
+provides a [demo gallery](https://demo.thumbrella.dev) and server for free
+evaluation — no account required.
 
-```bash
-npm run demo
-```
+## Next Steps
 
-Renders four hardcoded thumbnails from the demo server on `localhost:4343`.
+- **[Client docs](https://thumbrella.dev/docs/client/)** — full API reference
+- **[Thumbrella](https://thumbrella.dev)** — main site
+- **[GitHub](https://github.com/thumbrella-dev/clients)** — source and issues
 
 ## License
 
-Apache-2.0. See [LICENSE](./LICENSE).
+Apache-2.0. See [LICENSE](https://github.com/thumbrella-dev/clients/blob/main/LICENSE).
 

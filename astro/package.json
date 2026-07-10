@@ -18,8 +18,11 @@
   "keywords": ["thumbrella", "astro", "thumbnail", "image", "media", "components"],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/thumbrella-dev/thumbrella-clients.git",
+    "url": "git+https://github.com/thumbrella-dev/clients.git",
     "directory": "astro"
   },
-  "homepage": "https://thumbrella.dev/docs/client"
+  "homepage": "https://thumbrella.dev",
+  "bugs": {
+    "url": "https://github.com/thumbrella-dev/clients/issues"
+  }
 }

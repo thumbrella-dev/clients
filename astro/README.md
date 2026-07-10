@@ -1,19 +1,18 @@
 # @thumbrella/astro
 
-Astro components for [Thumbrella](https://thumbrella.dev) — a thumbnail API
-that handles images, video, documents, 3D models, and more.
+Astro components for [Thumbrella](https://thumbrella.dev), a fast thumbnail
+server for images, video, documents, and more.
 
 [![npm version](https://img.shields.io/npm/v/@thumbrella/astro)](https://www.npmjs.com/package/@thumbrella/astro)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](./LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/thumbrella-dev/clients/blob/main/LICENSE)
 
-Built on `@thumbrella/client`.  Provides two components:
+> Thumbrella is still in prerelease. The server functionality is operational,
+> but several production components have yet to appear. Recommended for early
+> evaluation only.
 
-- **`<Thumbnail>`** — drop-in `<img>` replacement.  Always renders an image,
-  even if the server is unreachable or the media URL is invalid.  Longer
-  renders show a temporary placeholder until the final thumbnail arrives.
-- **`<Thumbrella>`** — scoped coordinator.  Group `<Thumbnail>` components
-  inside it and they share configuration, batch their requests into a single
-  streaming call, and reuse identical placeholder images.
+Built on [`@thumbrella/client`](https://www.npmjs.com/package/@thumbrella/client).
+Drop-in components that batch requests and stream thumbnails into your Astro
+pages — with zero-config lazy loading, CSS lifecycle hooks, and SPA support.
 
 ## Install
 
@@ -21,7 +20,7 @@ Built on `@thumbrella/client`.  Provides two components:
 npm install @thumbrella/astro
 ```
 
-## Usage
+## Quickstart
 
 ```astro
 ---
@@ -31,82 +30,70 @@ import { Thumbnail, Thumbrella } from "@thumbrella/astro";
 <Thumbrella connect="https://demo.thumbrella.dev">
   <Thumbnail src="https://demo.thumbrella.dev/media/apollo-exterior.glb" />
   <Thumbnail src="https://demo.thumbrella.dev/media/raw-pentax.pef" />
+  <Thumbnail src="https://demo.thumbrella.dev/media/neon-block.png" />
 </Thumbrella>
 ```
 
-Thumbnails live inside a `<Thumbrella>` wrapper — they don't need to be
-immediate children.  Any `<Thumbnail>` anywhere in the subtree is discovered,
-deduplicated by URL, and loaded through a single `stream()` call.  New
-thumbnails added dynamically (SPA navigation, infinite scroll) are picked up
+Thumbnails don't need to be direct children — anywhere in the subtree is
+discovered, deduplicated by URL, and loaded through a single `stream()` call.
+Thumbnails added dynamically (SPA navigation, infinite scroll) are picked up
 automatically.
 
-### Connect strings
+Every `<Thumbnail>` always renders an image — even on failure, or with no
+server. A placeholder shows immediately and the final thumbnail fades in when
+it arrives.
+
+### Connect Strings
 
 ```astro
-<!-- Public demo server (no auth needed) -->
+<!-- Public demo server — no auth needed -->
 <Thumbrella connect="https://demo.thumbrella.dev">
 
-<!-- Self-hosted server with an auth token -->
-<Thumbrella connect="tbr_e_YOURKEY">
+<!-- Self-hosted with a publishable key -->
+<Thumbrella connect="https://cloud.thumbrella.dev,tbr_p_...">
 ```
 
-**Important:** Thumbnail components load client-side in the browser.  Any
-server address or key placed in the `connect` attribute will be visible to
-end users.  Use publishable keys (`tbr_p_` / `tbr_e_`) which can be scoped
-to specific domains and usage quotas.
+Use publishable keys (`tbr_p_`) in client-side code — they're visible to end
+users and can be scoped to specific domains and quotas.
 
-### Lazy loading
+### Lazy Loading
 
 ```astro
-<!-- Only load thumbnails as they scroll into view -->
 <Thumbrella connect="..." lazyLoad>
 
-<!-- Override per element -->
 <Thumbnail src="..." lazyLoad={false} />
 ```
 
 ### Events
 
-Each thumbnail fires a `tbr:loaded` event when it finishes loading.  Use it
-to build custom badges, overlays, or status indicators:
+Listen for `tbr:loaded` to build custom overlays or status badges:
 
-```js
-document.addEventListener("tbr:loaded", (e) => {
-  // e.detail = { url, status, source, kind, duration, message, bytes, placeholder }
-  const badge = document.createElement("div");
-  badge.textContent = e.detail.source || e.detail.status;
-  e.target.appendChild(badge);
-});
+```html
+<script>
+  document.addEventListener("tbr:loaded", (e) => {
+    console.log(e.detail.status, e.detail.kind, e.detail.source);
+  });
+</script>
 ```
 
-### CSS hooks
+### CSS Hooks
 
-The `.tbr-wrap` element on each thumbnail receives lifecycle classes for
-styling: `tbr-requested`, `tbr-intermediate`, `tbr-success`, `tbr-failed`,
-`tbr-overloaded`, `tbr-unavailable`, `tbr-offscreen`.
+Each `.tbr-wrap` element receives lifecycle classes for styling:
+`.tbr-requested`, `.tbr-intermediate`, `.tbr-success`, `.tbr-failed`,
+`.tbr-overloaded`, `.tbr-unavailable`, `.tbr-offscreen`, `.tbr-loaded`.
 
-## How it works
+## Servers
 
-1. `<Thumbnail>` renders two `<img>` elements — a placeholder that shows
-   immediately, and a final image that fades in when the server responds.
-2. `<Thumbrella>` injects a script that creates a `Client`, scans its DOM
-   scope, and calls `stream()` to batch-load all URLs.
-3. As results arrive each `<img>` gets its `src` replaced with the real JPEG.
-   Intermediate results fill the placeholder slot so something is visible
-   while the server works.
-4. A `MutationObserver` picks up thumbnails added after the initial load.
-5. Identical placeholder images share a single blob URL — the browser
-   decodes them once.
+Works with self-hosted Thumbrella servers and Thumbrella Cloud. Thumbrella
+provides a [demo gallery](https://demo.thumbrella.dev) and server for free
+evaluation — no account required.
 
-## Demo
+## Next Steps
 
-```bash
-npm run demo
-```
-
-Loads `https://demo.thumbrella.dev/index.json` and renders a filterable grid
-of all available media through the components.
+- **[Client docs](https://thumbrella.dev/docs/client/)** — full API reference
+- **[Thumbrella](https://thumbrella.dev)** — main site
+- **[GitHub](https://github.com/thumbrella-dev/clients)** — source and issues
 
 ## License
 
-Apache-2.0. See [LICENSE](./LICENSE).
+Apache-2.0. See [LICENSE](https://github.com/thumbrella-dev/clients/blob/main/LICENSE).
