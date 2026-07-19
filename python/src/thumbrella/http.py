@@ -32,7 +32,7 @@ def parse_connect(
     if connect is None:
         connect = os.environ.get("TBR_CONNECT", DEFAULT_BASE)
 
-    # Bare value — no scheme.  Dispatch to auth or handshake by prefix.
+    # Bare value, no scheme.  Dispatch to auth or handshake by prefix.
     if "://" not in connect:
         if _is_auth_token(connect):
             session.headers["Authorization"] = f"Bearer {connect}"
@@ -136,7 +136,7 @@ async def aio_ndjson(
                     pass
 
 
-# Global backoff — shared across all Client instances.
+# Global backoff, shared across all Client instances.
 _host_backoff: dict[str, tuple[float, int]] = {}
 
 

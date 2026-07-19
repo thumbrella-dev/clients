@@ -1,5 +1,5 @@
 // Type declarations for localtunnel (optional --tunnel dependency).
-// localtunnel is not a hard dependency of @thumbrella/client — it is only
+// localtunnel is not a hard dependency of @thumbrella/client, it is only
 // imported dynamically when the user passes the --tunnel flag.  These
 // declarations let TypeScript check the usage at build time without
 // requiring the package to be installed.

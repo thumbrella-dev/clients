@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Browser-side Thumbrella coordinator — framework-agnostic.
+ * Browser-side Thumbrella coordinator, framework-agnostic.
  *
  * Works with React, Astro, Vue, or plain HTML.  Scans a root element for
  * `.tbr-wrap[data-tbr-url]` children, batches them through a streaming

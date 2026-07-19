@@ -37,20 +37,20 @@ function Gallery() {
 }
 ```
 
-Thumbnails don't need to be immediate children of `<Thumbrella>` — anywhere in
+Thumbnails don't need to be immediate children of `<Thumbrella>`, anywhere in
 the subtree works. New thumbnails added dynamically are picked up automatically.
 
 ### Connect Strings
 
 ```tsx
-{/* Public demo server — no auth needed */}
+{/* Public demo server, no auth needed */}
 <Thumbrella connect="https://demo.thumbrella.dev">
 
 {/* Self-hosted with a publishable key */}
 <Thumbrella connect="https://cloud.thumbrella.dev,tbr_p_...">
 ```
 
-Use publishable keys (`tbr_p_`) in client-side code — they're visible to end
+Use publishable keys (`tbr_p_`) in client-side code, they're visible to end
 users and can be scoped to specific domains and quotas.
 
 ### Lazy Loading
@@ -75,13 +75,13 @@ Each thumbnail fires a `tbr:loaded` event when it finishes:
 
 Works with self-hosted Thumbrella servers and Thumbrella Cloud. Thumbrella
 provides a [demo gallery](https://demo.thumbrella.dev) and server for free
-evaluation — no account required.
+evaluation, no account required.
 
 ## Next Steps
 
-- **[Client docs](https://thumbrella.dev/docs/client/)** — full API reference
-- **[Thumbrella](https://thumbrella.dev)** — main site
-- **[GitHub](https://github.com/thumbrella-dev/clients)** — source and issues
+- **[Client docs](https://thumbrella.dev/docs/client/)** - full API reference
+- **[Thumbrella](https://thumbrella.dev)** - main site
+- **[GitHub](https://github.com/thumbrella-dev/clients)** - source and issues
 
 ## License
 

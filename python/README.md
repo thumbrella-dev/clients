@@ -44,7 +44,7 @@ import thumbrella
 
 # Connect to server and generate a thumbnail.
 tbr = thumbrella.Client()
-result = tbr.thumb("https://example.com/photo.jpg")
+result = tbr.thumb("https://demo.thumbrella.dev/media/base-glove.usdz")
 print(result.status, len(result.media.thumbnail), "bytes")
 
 # Pillow can decode from a zero-copy buffer.

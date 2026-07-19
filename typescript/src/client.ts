@@ -14,7 +14,7 @@ import {
 
 //  constants 
 
-const DEFAULT_BASE = "https://cloud.thumbrella.dev/";
+const DEFAULT_BASE = "https://cloud.thumbrella.dev";
 const MAX_BACKOFF_MS = 60_000;
 const HTTP_TIMEOUT_MS = 12_000;
 
@@ -59,7 +59,7 @@ export function parseConnect(connect?: string): ConnectConfig {
     || (typeof process !== "undefined" && process.env.TBR_CONNECT)
     || DEFAULT_BASE;
 
-  // Bare value — no scheme.  Dispatch to auth or handshake by prefix.
+  // Bare value, no scheme.  Dispatch to auth or handshake by prefix.
   if (!raw.includes("://")) {
     const headers: Record<string, string> = {};
     if (isAuthToken(raw)) {
@@ -130,8 +130,8 @@ function mediaFromCaches(url: string, caches: readonly Cache[]): Media | undefin
 /** Decode one NDJSON line into a result object.
  *
  *  Supports two formats:
- *  - Raw: `{"url":"...","status":"success",...}` — the entire object is the result.
- *  - Envelope: `{"type":"item.result","index":0,"result":{...}}` — the `result` field is extracted.
+ *  - Raw: `{"url":"...","status":"success",...}` the entire object is the result.
+ *  - Envelope: `{"type":"item.result","index":0,"result":{...}}` the `result` field is extracted.
  *  Returns null if the line doesn't look like a valid result.
  */
 function parseBatchLine(parsed: Record<string, unknown>): Record<string, unknown> | null {

@@ -62,7 +62,7 @@ fn parse_connect(connect: Option<&str>) -> ConnectConfig {
         .or_else(|| std::env::var("TBR_CONNECT").ok())
         .unwrap_or_else(|| DEFAULT_BASE.to_string());
 
-    // Bare value — no scheme.  Dispatch to auth or handshake by prefix.
+    // Bare value, no scheme.  Dispatch to auth or handshake by prefix.
     if !raw.contains("://") {
         let mut headers = HashMap::new();
         if is_auth_token(&raw) {
@@ -106,7 +106,7 @@ fn parse_connect(connect: Option<&str>) -> ConnectConfig {
 
 //  Client 
 
-/// Thumbrella API client — async-first.
+/// Thumbrella API client, async-first.
 ///
 /// A centralized configuration for a Thumbrella server and client-side caches.
 /// The connection is described by a "connect string". By default this uses the

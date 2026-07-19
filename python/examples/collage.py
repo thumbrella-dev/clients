@@ -1,4 +1,4 @@
-"""collage.py — stream thumbnails into a grid collage.
+"""collage.py stream thumbnails into a grid collage.
 
 Usage:
     python collage.py urls.txt collage.jpg
@@ -39,7 +39,7 @@ async def collage(urls_file: Path, out_path: Path) -> None:
     async for result in tbr.stream(urls):
         elapsed = time.monotonic() - t0
 
-        # Intermediate result — tier1 delegating to a renderer.
+        # Intermediate result tier1 delegating to a renderer.
         if result.status == "intermediate":
             placeholders += 1
             print(f"  ...      {result.url}")

@@ -1,5 +1,5 @@
 /**
- * file-share.ts — thumbnail a local file using Thumbrella Cloud.
+ * file-share.ts  thumbnail a local file using Thumbrella Cloud.
  *
  * Two modes (controlled by the --tunnel flag):
  *
@@ -7,7 +7,7 @@
  *     npx tsx examples/file-share.ts ./input.pdf out.jpg
  *
  *   Tunnel (--tunnel): serve the file from your machine through a tunnel.
- *     No middleman.  Supports HTTP range requests — Thumbrella only fetches
+ *     No middleman.  Supports HTTP range requests, Thumbrella only fetches
  *     the bytes it needs (great for large video files).
  *     npm install localtunnel
  *     npx tsx examples/file-share.ts --tunnel ./video.mp4 out.jpg

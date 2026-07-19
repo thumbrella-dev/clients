@@ -111,7 +111,7 @@ class Client:
                 "connect server not responding"
             ) from exc
         except ValueError:
-            # Non-JSON response — the server at the other end isn't thumbrella.
+            # Non-JSON response, the server at the other end isn't thumbrella.
             raise VerifyError("connect is not a thumbrella server") from None
         except requests.RequestException as exc:
             raise VerifyError(
@@ -312,7 +312,7 @@ def _client_user_agent() -> str:
     return f"thumbrella-python/{ver}"
 
 
-# Per-server placeholder thumbnail cache — permanent, keyed by connect string.
+# Per-server placeholder thumbnail cache, permanent, keyed by connect string.
 _PLACEHOLDER_CACHE: dict[str, dict[str, EncodedJpeg]] = {}
 
 
@@ -409,7 +409,7 @@ def _preflight_urls(
     stale: list[dict[str, str]] = []
 
     for url in urls:
-        # Basic URL validation — must have a scheme.
+        # Basic URL validation, must have a scheme.
         if not url or "://" not in url:
             done[url] = Result.client_fail(url, "invalid URL")
             continue
@@ -427,7 +427,7 @@ def _preflight_urls(
         if fresh:
             continue
 
-        # Stale — build the server request.  Include the cache token
+        # Stale, build the server request.  Include the cache token
         # from any cached media so the server can do a conditional revalidation.
         item: dict[str, str] = {"url": url}
         for cache in caches:

@@ -1,5 +1,5 @@
 /**
- * Status and type constants — string-based for cross-language portability.
+ * Status and type constants, string-based for cross-language portability.
  */
 
 export const Status = {
@@ -7,7 +7,7 @@ export const Status = {
   FAILED: "failed",
   OVERLOADED: "overloaded",
   INTERMEDIATE: "intermediate",
-  /** Client-side only — server was unreachable. */
+  /** Client-side only, server was unreachable. */
   UNAVAILABLE: "unavailable",
 } as const;
 export type Status = (typeof Status)[keyof typeof Status];
@@ -16,13 +16,13 @@ export const Source = {
   RENDER: "render",
   SHORTCUT: "shortcut",
   CACHE: "cache",
-  /** Client cache hints were valid — no new thumbnail needed. */
+  /** Client cache hints were valid, no new thumbnail needed. */
   NOT_MODIFIED: "not_modified",
   /** A registered renderer tried but could not handle this format. */
   FALLBACK: "fallback",
   /** No renderer was registered for this format at all. */
   PLACEHOLDER: "placeholder",
-  /** Client-side only — synthetic, not from server. */
+  /** Client-side only, synthetic, not from server. */
   CLIENT: "client",
 } as const;
 export type Source = (typeof Source)[keyof typeof Source];
@@ -98,7 +98,7 @@ export class EncodedJpeg {
     return 0;
   }
 
-  /** Stable content hash — use as a Map key for image caching. */
+  /** Stable content hash, use as a Map key for image caching. */
   get key(): number {
     if (this._hash === null) {
       const b = this.bytes;

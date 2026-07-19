@@ -1,4 +1,4 @@
-"""gallery.py — stream a batch of URLs with live progress and local caching.
+"""gallery.py - stream a batch of URLs with live progress and local caching.
 
 Usage:
     python gallery.py urls.txt thumbs/

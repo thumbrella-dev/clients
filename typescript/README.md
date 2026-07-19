@@ -19,12 +19,12 @@ packages for other languages and environments. See
 
 If you're building a React or Astro site, check out
 **[@thumbrella/react](https://www.npmjs.com/package/@thumbrella/react)**
-and **[@thumbrella/astro](https://www.npmjs.com/package/@thumbrella/astro)** —
+and **[@thumbrella/astro](https://www.npmjs.com/package/@thumbrella/astro)**,
 component wrappers that drop straight into your templates.
 
 ## Features
 
-- Zero runtime dependencies — only needs `fetch`
+- Zero runtime dependencies, only needs `fetch`
 - Runs in Node 18+, Deno, Bun, and modern browsers
 - Stream results as the server renders thumbnails
 - In-memory LRU cache takes full advantage of HTTP cache headers
@@ -44,21 +44,20 @@ npm install @thumbrella/client
 import { Client } from "@thumbrella/client";
 
 const tbr = await new Client().verify();
-const result = await tbr.thumb("https://example.com/photo.jpg");
+const result = await tbr.thumb("https://demo.thumbrella.dev/media/pocket-game.webp");
 
 console.log(result.status, result.media!.thumbnail.length, "bytes");
 
+const media_urls = [
+  "https://demo.thumbrella.dev/media/padres-stereo.exr",
+  "https://demo.thumbrella.dev/media/golden-gate.exr",
+];
+
 // Batch many URLs
-const results = await tbr.batch([
-  "https://example.com/a.jpg",
-  "https://example.com/b.png",
-]);
+const results = await tbr.batch(media_urls);
 
 // Stream results as they complete
-for await (const r of tbr.stream([
-  "https://example.com/a.jpg",
-  "https://example.com/b.png",
-])) {
+for await (const r of tbr.stream(media_urls)) {
   console.log(r.url, r.status);
 }
 ```
@@ -69,7 +68,7 @@ Using the bundled CLI:
 # Upload a file to a public host, then thumbnail the URL
 npx thumbrella-file ./photo.jpg thumb.jpg
 
-# Tunnel mode — serve from your machine, no middleman
+# Tunnel mode, serve from your machine, no middleman
 npm install localtunnel
 npx thumbrella-file --tunnel ./video.mp4 thumb.jpg
 ```
@@ -79,9 +78,9 @@ npx thumbrella-file --tunnel ./video.mp4 thumb.jpg
 The client uses only `fetch` and standard APIs, so it works anywhere modern JS
 runs. The same `import` works in:
 
-- **Node 18+** — server-side scripts, workers, CI pipelines
-- **Browsers** — directly in a `<script type="module">` or bundled with your SPA
-- **Edge runtimes** — Cloudflare Workers, Deno Deploy, Bun
+- **Node 18+** - server-side scripts, workers, CI pipelines
+- **Browsers** - directly in a `<script type="module">` or bundled with your SPA
+- **Edge runtimes** - Cloudflare Workers, Deno Deploy, Bun
 
 ## Servers
 
@@ -95,7 +94,7 @@ new Client({ connect: "https://cloud.thumbrella.dev,tbr_s_..." });  // cloud tok
 ```
 
 Thumbrella provides a [demo gallery](https://demo.thumbrella.dev) and server
-that can be used for free — no account, no signup, immediate access.
+that can be used for free; no account, no signup, immediate access.
 
 ## License
 

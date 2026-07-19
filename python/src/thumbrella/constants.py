@@ -1,4 +1,4 @@
-"""Status and type constants — string-based for cross-language portability."""
+"""Status and type constants, string-based for cross-language portability."""
 
 
 DEFAULT_BASE = "https://cloud.thumbrella.dev/"
