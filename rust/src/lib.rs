@@ -1,4 +1,4 @@
-//! Thumbrella Rust client — async-first thumbnail generation.
+//! Thumbrella Rust client, async-first thumbnail generation.
 //!
 //! ```no_run
 //! # async fn example() -> Result<(), thumbrella_client::Error> {

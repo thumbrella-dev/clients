@@ -12,7 +12,7 @@ server for images, video, documents, and more.
 
 Built on [`@thumbrella/client`](https://www.npmjs.com/package/@thumbrella/client).
 Drop-in components that batch requests and stream thumbnails into your Astro
-pages — with zero-config lazy loading, CSS lifecycle hooks, and SPA support.
+pages, with zero-config lazy loading, CSS lifecycle hooks, and SPA support.
 
 ## Install
 
@@ -34,26 +34,26 @@ import { Thumbnail, Thumbrella } from "@thumbrella/astro";
 </Thumbrella>
 ```
 
-Thumbnails don't need to be direct children — anywhere in the subtree is
+Thumbnails don't need to be direct children, anywhere in the subtree is
 discovered, deduplicated by URL, and loaded through a single `stream()` call.
 Thumbnails added dynamically (SPA navigation, infinite scroll) are picked up
 automatically.
 
-Every `<Thumbnail>` always renders an image — even on failure, or with no
+Every `<Thumbnail>` always renders an image, even on failure, or with no
 server. A placeholder shows immediately and the final thumbnail fades in when
 it arrives.
 
 ### Connect Strings
 
 ```astro
-<!-- Public demo server — no auth needed -->
+<!-- Public demo server, no auth needed -->
 <Thumbrella connect="https://demo.thumbrella.dev">
 
 <!-- Self-hosted with a publishable key -->
 <Thumbrella connect="https://cloud.thumbrella.dev,tbr_p_...">
 ```
 
-Use publishable keys (`tbr_p_`) in client-side code — they're visible to end
+Use publishable keys (`tbr_p_`) in client-side code - they're visible to end
 users and can be scoped to specific domains and quotas.
 
 ### Lazy Loading
@@ -86,13 +86,13 @@ Each `.tbr-wrap` element receives lifecycle classes for styling:
 
 Works with self-hosted Thumbrella servers and Thumbrella Cloud. Thumbrella
 provides a [demo gallery](https://demo.thumbrella.dev) and server for free
-evaluation — no account required.
+evaluation, no account required.
 
 ## Next Steps
 
-- **[Client docs](https://thumbrella.dev/docs/client/)** — full API reference
-- **[Thumbrella](https://thumbrella.dev)** — main site
-- **[GitHub](https://github.com/thumbrella-dev/clients)** — source and issues
+- **[Client docs](https://thumbrella.dev/docs/client/)** - full API reference
+- **[Thumbrella](https://thumbrella.dev)** - main site
+- **[GitHub](https://github.com/thumbrella-dev/clients)** - source and issues
 
 ## License
 

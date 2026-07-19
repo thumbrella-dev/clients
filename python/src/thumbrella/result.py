@@ -137,7 +137,7 @@ class Media:
     ``lossless``. But these properties are still optional and may not always
     be included.
     
-    Stable media identity — reusable, cacheable, hashable by content.
+    Stable media identity, reusable, cacheable, hashable by content.
 
     The ``thumbnail`` attribute will always be valid. This is a
     `EncodedJpeg` object that provides several conveniences for accessing

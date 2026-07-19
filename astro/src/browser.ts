@@ -7,7 +7,7 @@
  *
  * Lifecycle classes applied to each `.tbr-wrap` element:
  *
- *   tbr-paused      initial state — not yet queued
+ *   tbr-paused      initial state not yet queued
  *   tbr-offscreen   outside the viewport (added by IntersectionObserver)
  *   tbr-requested   URL has been sent to the server
  *   tbr-success     server returned a successful thumbnail

@@ -22,7 +22,7 @@ packages for other languages and environments. See
 
 - Async-first with [reqwest](https://crates.io/crates/reqwest) (rustls TLS)
 - Optional `blocking` feature provides a sync wrapper
-- Minimal dependency tree — `reqwest`, `serde`, `base64`, `thiserror`
+- Minimal dependency tree; `reqwest`, `serde`, `base64`, `thiserror`
 - Stream results as the server renders thumbnails (coming soon)
 - In-memory LRU cache takes full advantage of HTTP cache headers
 - The client and server always provide placeholder images, even when disconnected
@@ -38,14 +38,14 @@ cargo add thumbrella-client
 ```
 
 ```rust
-use thumbrella_client::Client;
+use thumbrella_client as thumbrella;
 
 #[tokio::main]
-async fn main() -> Result<(), thumbrella_client::Error> {
-    let tbr = Client::new(None);
+async fn main() -> Result<(), thumbrella::Error> {
+    let tbr = thumbrella::Client::new(None);
     tbr.verify().await?;
 
-    let result = tbr.thumb("https://example.com/photo.jpg").await?;
+    let result = tbr.thumb("https://demo.thumbrella.dev/media/game-level.png").await?;
     if let Some(media) = &result.media {
         println!("{} bytes  {}", media.thumbnail.len(), media.kind);
         std::fs::write("thumb.jpg", media.thumbnail.bytes())?;
@@ -62,12 +62,12 @@ cargo add thumbrella-client --features blocking
 ```
 
 ```rust
-use thumbrella_client::blocking::Client as BlockingClient;
+use thumbrella_client as thumbrella;
 
-fn main() -> Result<(), thumbrella_client::Error> {
-    let tbr = BlockingClient::new(None);
+fn main() -> Result<(), thumbrella::Error> {
+    let tbr = thumbrella::blocking::BlockingClient::new(None);
     tbr.verify()?;
-    let result = tbr.thumb("https://example.com/photo.jpg")?;
+    let result = tbr.thumb("https://demo.thumbrella.dev/media/packing-boxes.avi")?;
     println!("{} bytes", result.media.unwrap().thumbnail.len());
     Ok(())
 }
@@ -85,7 +85,7 @@ Client::new(Some("https://cloud.thumbrella.dev,tbr_s_..."));        // cloud tok
 ```
 
 Thumbrella provides a [demo gallery](https://demo.thumbrella.dev) and server
-that can be used for free — no account, no signup, immediate access.
+that can be used for free; no account, no signup, immediate access.
 
 ## License
 

@@ -1,4 +1,4 @@
-//! stream.rs — show progress on thumbnail rendering (batch mode).
+//! stream.rs  show progress on thumbnail rendering (batch mode).
 //!
 //! Note: true NDJSON streaming is not yet implemented in the Rust client.
 //! This example uses `batch()` instead, which waits for all results.

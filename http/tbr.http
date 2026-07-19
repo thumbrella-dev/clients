@@ -1,10 +1,10 @@
 # Pick a custom host url, or put in your own private key, or use the demo site
-#@host = https://cloud.thumbrella.dev   # Main online service, needs auth token
-@host = https://demo.thumbrella.dev   # Demo server, free requests to demo site media
+#@host = https://cloud.thumbrella.dev
+@host = https://demo.thumbrella.dev
 #@host = http://localhost:3114
 
 @token = none
-#@token = tbr_e_oQftPlhB6ulGkdu5lILXKZBM  # (example token)
+#@token = tbr_x_oQftPlhB6ulGkdu5lILXKZBM
 
 
 ### Server check (and token check for main online server)
@@ -19,6 +19,7 @@ Authorization: Bearer {{token}}
 
 ### Batch (single)
 POST {{host}}/batch
+Authorization: Bearer {{token}}
 Content-Type: application/json
 
 {"items":[{"url":"https://demo.thumbrella.dev/media/miss-library.avif"}]}

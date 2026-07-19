@@ -1,4 +1,4 @@
-//! Types and constants — mirror the server wire format.
+//! Types and constants, mirror the server wire format.
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -22,7 +22,7 @@ pub mod source {
     pub const RENDER: &str = "render";
     pub const SHORTCUT: &str = "shortcut";
     pub const CACHE: &str = "cache";
-    /// Client cache hints were valid — no new thumbnail needed.
+    /// Client cache hints were valid, no new thumbnail needed.
     pub const NOT_MODIFIED: &str = "not_modified";
     /// A registered renderer tried but could not handle this format.
     pub const FALLBACK: &str = "fallback";
@@ -56,7 +56,7 @@ pub enum Error {
 
 /// Binary JPEG thumbnail data.
 ///
-/// This represents the encoded JPEG data stream — not pixel data.  It can
+/// This represents the encoded JPEG data stream, not pixel data.  It can
 /// be shared across multiple `Media` objects via `Arc` to make placeholder
 /// images more efficient.
 ///
@@ -68,7 +68,7 @@ pub enum Error {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub struct Thumbnail {
-    /// Shared JPEG bytes — cloning is cheap (Arc).
+    /// Shared JPEG bytes, cloning is cheap (Arc).
     data: Arc<Vec<u8>>,
     /// Pre-computed content hash for fast Map lookups.
     hash: u64,
@@ -220,7 +220,7 @@ impl Media {
 /// Comparing against the [`status`] constants is the best way to branch on
 /// outcome.
 ///
-/// The top-level fields represent the process of generating the result —
+/// The top-level fields represent the process of generating the result,
 /// whether the operation was successful, how caching was involved, and the
 /// operations used by either the client or server.
 ///

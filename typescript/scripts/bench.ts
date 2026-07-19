@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * bench.ts — Thumbrella API benchmarking tool
+ * bench.ts   Thumbrella API benchmarking tool
  *
  * Uses the @thumbrella/client library to send batch requests and report timing.
  *
@@ -139,7 +139,7 @@ async function main() {
     console.log(`Benchmark ${urls.length} media for ${tbr.baseUrl}`);
   }
 
-  // Warmup pass — absorbs cold starts before timed runs.
+  // Warmup pass, absorbs cold starts before timed runs.
   await warmup(tbr, urls, opts.batchSize);
 
   let totalOk = 0;

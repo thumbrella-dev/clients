@@ -1,4 +1,4 @@
-//! basic.rs — download one thumbnail to a file.
+//! basic.rs  download one thumbnail to a file.
 //!
 //! Usage:
 //!     cargo run --example basic https://www.python.org/static/img/python-logo.png thumb.jpg

@@ -16,7 +16,7 @@ bin/
 target/
 .astro/
 
-# Lockfiles — libraries don't commit or publish these.
+# Lockfiles, libraries don't commit or publish these.
 # Dependencies are resolved from each package's manifest at build time.
 package-lock.json
 uv.lock

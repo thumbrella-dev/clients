@@ -1,4 +1,4 @@
-//! Result caches — reduce server round-trips for repeated URLs.
+//! Result caches, reduce server round-trips for repeated URLs.
 //!
 //! Caches are passed to the [`Client`](crate::Client) when constructed.
 //! Each client works with a stack of cache objects, and will use a small
@@ -15,7 +15,7 @@ use std::sync::Mutex;
 
 use crate::types::Media;
 
-/// Abstract base for result caches — stores [`Media`] entries keyed by URL.
+/// Abstract base for result caches, stores [`Media`] entries keyed by URL.
 pub trait Cache: Send + Sync {
     /// Get the possible cached media for a URL.
     fn get(&self, url: &str) -> Option<Media>;
