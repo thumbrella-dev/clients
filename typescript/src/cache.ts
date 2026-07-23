@@ -1,6 +1,80 @@
 import { Media } from "./types.js";
 
 /**
+ * Low-level byte cache backend.
+ *
+ * Caches operate on raw thumbnail bytes (Uint8Array). Both sync and async
+ * backends are supported — the caller always `await`s the result.
+ *
+ * Any object with matching `get`/`set` methods satisfies this interface
+ * via structural typing — no need to `implement` or subclass.
+ *
+ * Usage:
+ * ```ts
+ * const cache: CacheBackend = createMemoryCache({ max: 500, ttl: 300_000 });
+ * ```
+ */
+export interface CacheBackend {
+  get(key: string): Uint8Array | undefined | Promise<Uint8Array | undefined>;
+  set(key: string, value: Uint8Array): unknown | Promise<unknown>;
+}
+
+// ── inline LRU (no external dependencies) ─────────────────────────────────
+
+interface LruEntry {
+  value: Uint8Array;
+  expires: number;
+}
+
+/**
+ * Create an in-memory LRU cache for raw thumbnail bytes.
+ *
+ * A small, dependency-free LRU with TTL eviction.  The returned object
+ * satisfies {@link CacheBackend} and can be passed directly to the DOM
+ * coordinator, the web component, or a custom setup.
+ *
+ * Defaults: 500 entries, 5-minute TTL.
+ */
+export function createMemoryCache(
+  opts?: { max?: number; ttl?: number },
+): CacheBackend {
+  const max = opts?.max ?? 500;
+  const ttl = opts?.ttl ?? 300_000;
+  const map = new Map<string, LruEntry>();
+  const order: string[] = [];
+
+  return {
+    get(key: string): Uint8Array | undefined {
+      const entry = map.get(key);
+      if (!entry) return undefined;
+      if (Date.now() > entry.expires) {
+        map.delete(key);
+        const idx = order.indexOf(key);
+        if (idx >= 0) order.splice(idx, 1);
+        return undefined;
+      }
+      // Bump to front (LRU).
+      const idx = order.indexOf(key);
+      if (idx >= 0) order.splice(idx, 1);
+      order.unshift(key);
+      return entry.value;
+    },
+
+    set(key: string, value: Uint8Array): void {
+      if (map.has(key)) {
+        const idx = order.indexOf(key);
+        if (idx >= 0) order.splice(idx, 1);
+      } else if (map.size >= max) {
+        const stale = order.pop();
+        if (stale) map.delete(stale);
+      }
+      map.set(key, { value, expires: Date.now() + ttl });
+      order.unshift(key);
+    },
+  };
+}
+
+/**
  * Abstract base for result caches.
  *
  * Caches are passed to the {@link Client} when constructed. Each client works

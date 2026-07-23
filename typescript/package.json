@@ -10,7 +10,18 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
-    }
+    },
+    "./dom": {
+      "types": "./dist/dom.d.ts",
+      "import": "./dist/dom.js",
+      "default": "./dist/dom.js"
+    },
+    "./element": {
+      "types": "./dist/element.d.ts",
+      "import": "./dist/element.js",
+      "default": "./dist/element.js"
+    },
+    "./styles.css": "./dist/styles.css"
   },
   "bin": {
     "thumbrella-file": "./dist/bin/file.js"
@@ -21,7 +32,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node -e \"require('fs').cpSync('src/styles.css','dist/styles.css')\"",
     "bench": "tsx scripts/bench.ts"
   },
   "keywords": [

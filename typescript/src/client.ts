@@ -1,4 +1,4 @@
-import type { Cache } from "./cache.js";
+import type { Cache, CacheBackend } from "./cache.js";
 import { MemoryCache, putAllCaches } from "./cache.js";
 import {
   Result,
@@ -261,10 +261,13 @@ export class Client {
   readonly baseUrl: string;
   private headers: Record<string, string>;
   private caches: Cache[];
+  /** Byte-level cache backends for raw thumbnail data (optional). */
+  readonly cacheBackends: CacheBackend[];
 
   constructor(opts?: {
     connect?: string;
     caches?: Cache[] | null;
+    cacheBackends?: CacheBackend[] | null;
   }) {
     const cfg = parseConnect(opts?.connect);
     this.baseUrl = cfg.baseUrl;
@@ -272,6 +275,7 @@ export class Client {
     this.caches = opts?.caches === undefined
       ? [new MemoryCache()]
       : opts?.caches ?? [];
+    this.cacheBackends = opts?.cacheBackends ?? [];
   }
 
   // ── public API ──────────────────────────────────────────────────────────

@@ -1,0 +1,145 @@
+/* ==========================================================================
+   Thumbrella light-DOM styles
+   ==========================================================================
+   Include this stylesheet when using `initThumbnails()` (light-DOM mode).
+   The `<thumbrella-thumb>` web component uses Shadow DOM and does NOT need
+   this file — its styles are self-contained.
+
+   All selectors are scoped to `.tbr-wrap` to avoid leaking into the page.
+   Customise the look via CSS custom properties on any ancestor element:
+     --tbr-shimmer       shimmer gradient colour
+     --tbr-spinner-color spinner accent colour
+     --tbr-radius        border radius
+     --tbr-bg            background colour while loading
+   ========================================================================== */
+
+/* ── base ──────────────────────────────────────────────────────────────── */
+
+.tbr-wrap {
+  display: block;
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--tbr-radius, 14px);
+  background: var(--tbr-bg, #0d1225);
+}
+
+.tbr-wrap img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* ── layered image reveal ──────────────────────────────────────────────── */
+
+.tbr-placeholder {
+  z-index: 1;
+  transition: opacity 0.25s ease;
+}
+
+.tbr-final {
+  z-index: 3;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+}
+
+.tbr-loaded .tbr-final {
+  opacity: 1;
+}
+
+/* ── shimmer skeleton ──────────────────────────────────────────────────── */
+
+.tbr-requested .tbr-placeholder,
+.tbr-intermediate .tbr-placeholder {
+  animation: tbr-shimmer 2s ease-in-out infinite;
+}
+
+.tbr-wrap::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: linear-gradient(
+    105deg,
+    var(--tbr-shimmer, rgba(255, 255, 255, 0.03)) 40%,
+    rgba(255, 255, 255, 0.09) 50%,
+    var(--tbr-shimmer, rgba(255, 255, 255, 0.03)) 60%
+  );
+  background-size: 200% 100%;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.tbr-requested::before,
+.tbr-intermediate::before {
+  opacity: 1;
+  animation: tbr-sweep 2.2s ease-in-out infinite;
+}
+
+.tbr-loaded::before {
+  opacity: 0;
+}
+
+.tbr-has-intermediate::before {
+  opacity: 0;
+}
+
+.tbr-has-intermediate .tbr-placeholder {
+  animation: none;
+}
+
+.tbr-loaded .tbr-placeholder {
+  opacity: 0;
+}
+
+/* ── spinner ───────────────────────────────────────────────────────────── */
+
+.tbr-spinner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+  z-index: 4;
+}
+
+.tbr-spinner::after {
+  content: "";
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-top-color: var(--tbr-spinner-color, #7c5cff);
+  border-radius: 50%;
+  animation: tbr-spin 0.8s linear infinite;
+}
+
+.tbr-requested .tbr-spinner,
+.tbr-intermediate .tbr-spinner {
+  opacity: 1;
+}
+
+.tbr-loaded .tbr-spinner {
+  opacity: 0;
+}
+
+/* ── keyframes ─────────────────────────────────────────────────────────── */
+
+@keyframes tbr-shimmer {
+  0%, 100% { filter: brightness(1); }
+  50%      { filter: brightness(1.12); }
+}
+
+@keyframes tbr-sweep {
+  0%   { background-position: -100% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes tbr-spin {
+  to { transform: rotate(360deg); }
+}
