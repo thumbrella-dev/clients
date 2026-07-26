@@ -1,4 +1,4 @@
-export { Client, parseConnect } from "./client.js";
+export { Client, parseConnect } from "./api.js";
 export { MemoryCache, putAllCaches, createMemoryCache } from "./cache.js";
 export type { Cache, CacheBackend } from "./cache.js";
 export {

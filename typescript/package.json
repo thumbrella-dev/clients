@@ -1,6 +1,6 @@
 {
   "name": "@thumbrella/client",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "description": "TypeScript client for the Thumbrella thumbnail API - typed results, streaming batches, pluggable caching",
   "type": "module",
   "main": "dist/index.js",
@@ -11,20 +11,16 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
-    "./dom": {
-      "types": "./dist/dom.d.ts",
-      "import": "./dist/dom.js",
-      "default": "./dist/dom.js"
-    },
     "./element": {
       "types": "./dist/element.d.ts",
       "import": "./dist/element.js",
       "default": "./dist/element.js"
     },
-    "./styles.css": "./dist/styles.css"
-  },
-  "bin": {
-    "thumbrella-file": "./dist/bin/file.js"
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.js",
+      "default": "./dist/browser.js"
+    }
   },
   "files": [
     "dist/",
@@ -32,7 +28,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && node -e \"require('fs').cpSync('src/styles.css','dist/styles.css')\"",
+    "build": "tsc -p tsconfig.json",
     "bench": "tsx scripts/bench.ts"
   },
   "keywords": [

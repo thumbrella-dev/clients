@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Thumbrella — browser.js demo</title>
+  <style>
+    body { margin: 2rem; font-family: sans-serif; background: #335; color: #dde; }
+    textarea { width: 100%; max-width: 620px; height: 6em; padding: 8px;
+          font: monospace; background: #25224f; color: #e4e8f0; border: 1px solid #3a3d5e; border-radius: 8px; }
+    button { margin: 1rem; padding: 1rem 2rem; background: #7c5cff; color: white; cursor: pointer; border: 0; border-radius: 6px;}
+    button:disabled { opacity: 0.4; cursor: default; }
+    table {margin-top: 1rem; }
+    th, td { padding: 8px 10px;  }
+    th { color: #7c5cff; font-weight: 600; background: #123; }
+    td.url { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      color: #a0a5c0; }
+    td.status { text-transform: capitalize; font-weight: 600; }
+    td.status.success { color: #34d399; }
+    td.status.failed, td.status.unavailable { color: #fb7185; }
+    td.thumb img { width: 80px; aspect-ratio: 5/4; border-radius: 6px;  }
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #3a3d5e;
+      border-top-color: #7c5cff; border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle; margin-right: 6px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<h1>Browser API Demo</h1>
+<p>Shows individual results from streaming batch request.</p>
+
+<textarea id="urls">http://127.0.0.1:8790/media/space-colony.jpg
+http://127.0.0.1:8790/media/stanford-bunny.stl
+http://127.0.0.1:8790/media/harbor-trucks.mp4
+http://127.0.0.1:8790/media/missing-file</textarea>
+<br/>
+<button id="stream-btn">Stream results</button>
+<button id="clear-btn">Clear cache</button>
+
+<table id="results" width="100%">
+  <thead><tr><th>Thumb</th><th>URL</th><th>Status</th><th>Time</th></tr></thead>
+  <tbody>
+      <tr><td> </td><td> </td><td> </td><td> </td></tr>
+  </tbody>
+</table>
+
+<div id="busy" style="display:none;"><span class="spinner"></span>Streaming…</div>
+
+<script type="module">
+  import { Client, createMemoryCache, createThumbImg } from "../dist/browser.js";
+
+
+  // Thumbrella setup //
+  const cache = createMemoryCache();
+  const tbrClient = new Client({
+    connect: "http://127.0.0.1:8790",
+    cacheBackends: [cache],
+  });
+
+
+  // Stream urls and append result to table. //
+  async function streamThumbnails(urls, tbody, started) {
+    for await (const result of tbrClient.stream(urls)) {
+      const ms = Date.now() - started;
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td class="thumb"></td><td class="url">${result.url}</td>
+        <td class="status ${result.status}">${result.status}</td>
+        <td class="time">${ms}ms</td>`;
+      tbody.appendChild(tr);
+
+      const img = createThumbImg(result.media);
+      const td = tr.querySelector(".thumb");
+      if (img) td.replaceChildren(img);
+
+      tr.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+  }
+
+
+  //  UI wiring 
+  window.onClear = function () {
+    cache.reset();
+    document.querySelector("#results tbody").replaceChildren();
+  };
+
+  window.onStream = async function () {
+    const tbody = document.querySelector("#results tbody");
+    const btn = document.getElementById("stream-btn");
+    const busy = document.getElementById("busy");
+
+    const raw = document.getElementById("urls").value;
+    const urls = raw.split("\n").map(s => s.trim()).filter(Boolean);
+    if (urls.length === 0) return;
+
+    tbody.replaceChildren();
+    btn.disabled = true;
+    busy.style.display = "";
+
+    try {
+      await streamThumbnails(urls, tbody, Date.now());
+    } finally {
+      btn.disabled = false;
+      busy.style.display = "none";
+    }
+  };
+
+  document.getElementById("stream-btn").addEventListener("click", window.onStream);
+  document.getElementById("clear-btn").addEventListener("click", window.onClear);
+</script>
+
+</body>
+</html>

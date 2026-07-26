@@ -57,7 +57,7 @@ class Result:
     """
     __slots__ = (
         "url", "status", "message", "source", "duration", "download_size", 
-        "placeholder", "media", "raw", "__weakref__",    
+        "media", "raw", "__weakref__",    
     )
 
     def __init__(
@@ -74,7 +74,6 @@ class Result:
         self.source: str | None = data.get("source", Source.CLIENT)
         self.duration: float = float(data.get("duration", 0.0))
         self.download_size: int = int(data.get("download_size", 0))
-        self.placeholder: str | None = data.get("placeholder")
         self.media: Media | None = media
         self.raw: dict[str, Any] = data
         if not media:
@@ -95,7 +94,7 @@ class Result:
         """Build result from client side failure or unresponsive server."""
         data = {"url": url, "status": Status.FAILED, "source": Source.CLIENT, "message": message}
         return Result(data, thumbnail=_failed_thumbnail())
-
+    
     def __repr__(self) -> str:
         return f"<thumbrella.Result {self.status} {self.url!r}>"
 
@@ -150,7 +149,7 @@ class Media:
    """
 
     __slots__ = ("url", "thumbnail", "mime", "file_size", "kind",
-                 "extension", "properties", "cache", "__weakref__")
+                 "extension", "properties", "cache", "placeholder", "__weakref__")
 
     def __init__(
         self,
@@ -165,6 +164,7 @@ class Media:
         self.extension: str = data.get("extension", "")
         self.mime: str = data.get("mime", "application/octet-stream")
         self.properties: dict[str, int | float] = data.get("properties", {})
+        self.placeholder: str = data.get("placeholder", "")
         if thumbnail:
             self.thumbnail: EncodedJpeg = thumbnail
         else:

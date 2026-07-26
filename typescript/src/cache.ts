@@ -17,9 +17,11 @@ import { Media } from "./types.js";
 export interface CacheBackend {
   get(key: string): Uint8Array | undefined | Promise<Uint8Array | undefined>;
   set(key: string, value: Uint8Array): unknown | Promise<unknown>;
+  /** Clear all cached entries and reset statistics. */
+  reset(): void;
 }
 
-// ── inline LRU (no external dependencies) ─────────────────────────────────
+// Inline LRU
 
 interface LruEntry {
   value: Uint8Array;
@@ -70,6 +72,11 @@ export function createMemoryCache(
       }
       map.set(key, { value, expires: Date.now() + ttl });
       order.unshift(key);
+    },
+
+    reset(): void {
+      map.clear();
+      order.length = 0;
     },
   };
 }

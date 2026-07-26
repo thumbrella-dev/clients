@@ -41,7 +41,7 @@ export const FileKind = {
 } as const;
 export type FileKind = (typeof FileKind)[keyof typeof FileKind];
 
-// ── EncodedJpeg ──────────────────────────────────────────────────────────
+// EncodedJpeg
 
 /**
  * Binary JPEG thumbnail data.
@@ -112,7 +112,7 @@ export class EncodedJpeg {
   }
 }
 
-// ── Media ────────────────────────────────────────────────────────────────
+// Media
 
 /**
  * Data from the {@link Result} that describes the source media.
@@ -145,11 +145,18 @@ export class Media {
   url: string;
   thumbnail: EncodedJpeg;
   mime: string;
+  /** File-size in bytes from `Content-Length` (0 if unknown). */
   fileSize: number;
+  /** Detected media category. */
   kind: string;
+  /** Canonical file extension, no dot (e.g. `"jpeg"`, `""` if unknown). */
   extension: string;
+  /** Format-specific metadata (dimensions, colour depth, …). */
   properties: Record<string, number>;
-  cache: string | null;
+  /** Cache token: `"<hex_epoch>:<blob>"`, empty = do not cache. */
+  cache: string;
+  /** Non-empty when this is a shared placeholder / fallback image. */
+  placeholder: string;
 
   constructor(data: Record<string, unknown>) {
     this.url = (data.url as string) ?? "";
@@ -158,12 +165,13 @@ export class Media {
     this.kind = (data.kind as string) ?? FileKind.UNKNOWN;
     this.extension = (data.extension as string) ?? "";
     this.properties = (data.properties as Record<string, number>) ?? {};
-    this.cache = (data.cache as string) ?? null;
+    this.cache = (data.cache as string) ?? "";
+    this.placeholder = (data.placeholder as string) ?? "";
 
     const thumb = data.thumbnail as string | undefined;
-    this.thumbnail = thumb
+    this.thumbnail = (thumb && thumb.length > 0)
       ? new EncodedJpeg({ b64: thumb })
-      : new EncodedJpeg({ data: new Uint8Array(0) });
+      : new EncodedJpeg({ b64: _FAILED_B64 });
   }
 
   isFresh(): boolean {
@@ -175,7 +183,7 @@ export class Media {
   }
 }
 
-// ── Result ───────────────────────────────────────────────────────────────
+// Result
 
 /**
  * Result for every URL.
@@ -217,6 +225,56 @@ export class Media {
  *
  * See https://thumbrella.dev/docs/result for full documentation.
  */
+
+// Embedded "thumbnail unavailable" placeholder JPEG (250x200, same as failed.jpeg).
+const _FAILED_B64 =
+  "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" +
+  "0FoLQWgtBaC0FoDQWgNBaA0BoDQGggAIED//2Q==";
+
 export class Result {
   url: string;
   status: string;
@@ -224,7 +282,7 @@ export class Result {
   source: string | null;
   duration: number;
   downloadSize: number;
-  placeholder: string | null;
+  httpStatus: number | null;
   media: Media | null;
   raw: Record<string, unknown>;
 
@@ -235,7 +293,7 @@ export class Result {
     this.source = (data.source as string) ?? null;
     this.duration = (data.duration as number) ?? 0;
     this.downloadSize = (data.download_size as number) ?? 0;
-    this.placeholder = (data.placeholder as string) ?? null;
+    this.httpStatus = (data.http_status as number) ?? null;
     this.raw = data;
 
     const mediaRaw = data.media as Record<string, unknown> | undefined;
@@ -248,6 +306,7 @@ export class Result {
       status: Status.UNAVAILABLE,
       source: Source.CLIENT,
       message,
+      media: { file_size: 9, kind: FileKind.UNKNOWN, extension: "", mime: "", thumbnail: _FAILED_B64 },
     });
   }
 
@@ -268,7 +327,7 @@ export class Result {
   }
 }
 
-// ── Errors ───────────────────────────────────────────────────────────────
+// Errors
 
 export class ThumbError extends Error {
   constructor(message: string) {

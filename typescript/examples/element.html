@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>tbr-thumb — custom element example</title>
+  <style>
+    /* General page styling */
+    body { margin: 2rem; font-family: sans-serif; background: #335; color: #dde; }
+    figure {display: inline-block; }
+
+    /* Thumbnail styling */
+    tbr-thumb {width: 200px; border: 2px solid grey; border-radius: 14px; }
+    tbr-thumb.tbr-failed {border-color: red;}
+    tbr-thumb.tbr-success {border-color: green;}
+  </style>
+</head><body>
+
+<h1>&lt;tbr-thumb&gt; Example</h1><p>
+  <code>setup("https://demo.thumbrella.dev")</code> — then just drop in 
+  <code>&lt;tbr-thumb&gt;</code> tags.</p>
+
+
+<figure>
+  <tbr-thumb src="https://demo.thumbrella.dev/media/space-colony.jpg"></tbr-thumb>  
+<figcaption>space-colony.jpg</figcaption></figure>
+
+<figure>
+  <tbr-thumb src="https://demo.thumbrella.dev/media/pocket-game.webp"></tbr-thumb>  
+<figcaption>pocket-game.webp</figcaption></figure>
+
+<figure>
+  <tbr-thumb src="https://demo.thumbrella.dev/media/unknownthing"></tbr-thumb>  
+<figcaption>unknownthing</figcaption></figure>
+
+<figure>
+  <tbr-thumb src="https://demo.thumbrella.dev/media/neon-block.png"></tbr-thumb>  
+<figcaption>neon-block.png</figcaption></figure>
+
+
+
+<script type="module">
+    import { tbrSetup } from "../dist/element.js";
+    tbrSetup("http://127.0.0.1:8790/");
+</script>
+
+
+<!-- 
+
+To use for yourself, the import path should be changed to a CDN delivery 
+platform, like 'https://cdn.jsdelivr.net/npm/@thumbrella/client@1/+esm'
+
+For media outside demo.thumbrella.dev you must set the 
+connect argument to your own running server, or your auth token for 
+Thumbrella Cloud.
+
+More documentation is at https://thumbrella.dev/docs/client/
+
+-->
+
+
+</body></html>

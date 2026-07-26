@@ -1,60 +1,47 @@
 /// <reference lib="dom" />
 
 /**
- * element.ts — `<thumbrella-thumb>` custom element.
+ * element.ts — `<tbr-thumb>` custom element.
  *
  * A self-contained web component that renders a Thumbrella thumbnail.
- * Uses Shadow DOM for style isolation.  Imports this module to
- * auto-register the element; no additional setup required.
+ * Uses Shadow DOM for style isolation.
  *
- * ## Static-page usage:
  * ```html
- * <script type="module" src=".../element.js"></script>
- * <script>window.TBR_CONNECT = "https://thumbrella.dev/api";</script>
- * <thumbrella-thumb url="https://example.com/photo.jpg"></thumbrella-thumb>
+ * <script type="module">
+ *   import { tbrSetup } from "https://cdn.jsdelivr.net/npm/@thumbrella/client@0.3/dist/element.js";
+ *   tbrSetup({ connect: "tbr_p_xxxx" });
+ * </script>
+ * <tbr-thumb src="https://example.com/photo.jpg"></tbr-thumb>
  * ```
  *
  * ## Attributes:
- * - `url`     — media URL to thumbnail (required)
+ * - `src`     — media URL to thumbnail (like `<img>`)
  * - `connect` — Thumbrella connect string (optional, inherits from ancestor / global)
  * - `lazy`    — if `"true"`, only loads when scrolled into view
+ * - `alt`     — accessible label, used during loading
  *
  * ## CSS custom properties:
  * - `--tbr-shimmer`      — shimmer gradient colour
  * - `--tbr-spinner-color`— spinner accent colour
- * - `--tbr-radius`       — border radius
  * - `--tbr-bg`           — background colour while loading
  */
 
-import { Client } from "./client.js";
-import { Status } from "./types.js";
+import { Client, parseConnect } from "./api.js";
+import { Status, Result } from "./types.js";
 import type { CacheBackend } from "./cache.js";
 import { createMemoryCache } from "./cache.js";
+import { configure, enablePersistentCache } from "./browser.js";
 
-// ── shared client singleton ───────────────────────────────────────────────
+// Module state
 
 let _sharedClient: Client | null = null;
 let _sharedCaches: CacheBackend[] | null = null;
 
-function getSharedClient(): Client {
-  if (!_sharedClient) {
-    _sharedCaches = [createMemoryCache()];
-    _sharedClient = new Client({
-      connect: resolveGlobalConnect(),
-      cacheBackends: _sharedCaches,
-    });
-  }
-  return _sharedClient;
-}
+const _blobCache = new Map<number, string>();
 
-function resolveGlobalConnect(): string | undefined {
-  if (typeof window !== "undefined") {
-    return (window as unknown as Record<string, string>).TBR_CONNECT;
-  }
-  return undefined;
-}
+let _booted = false;
 
-// ── constructable stylesheet ──────────────────────────────────────────────
+// Constructable stylesheet
 
 const styles = new CSSStyleSheet();
 styles.replaceSync(`
@@ -62,10 +49,9 @@ styles.replaceSync(`
     display: inline-block;
     position: relative;
     overflow: hidden;
-    border-radius: var(--tbr-radius, 14px);
     background: var(--tbr-bg, #0d1225);
-    width: 100%;
-    height: 100%;
+    width: 250px;
+    aspect-ratio: 5 / 4;
   }
   :host([hidden]) { display: none; }
 
@@ -96,14 +82,14 @@ styles.replaceSync(`
     opacity: 1;
   }
 
-  /* ── shimmer skeleton ──────────────────────────────── */
+  /* Shimmer skeleton */
 
   :host(.tbr-requested) .tbr-placeholder,
   :host(.tbr-intermediate) .tbr-placeholder {
     animation: tbr-shimmer 2s ease-in-out infinite;
   }
 
-  .shimmer {
+  .tbr-shimmer {
     content: "";
     position: absolute;
     inset: 0;
@@ -120,17 +106,17 @@ styles.replaceSync(`
     transition: opacity 0.2s;
   }
 
-  :host(.tbr-requested) .shimmer,
-  :host(.tbr-intermediate) .shimmer {
+  :host(.tbr-requested) .tbr-shimmer,
+  :host(.tbr-intermediate) .tbr-shimmer {
     opacity: 1;
     animation: tbr-sweep 2.2s ease-in-out infinite;
   }
 
-  :host(.tbr-loaded) .shimmer {
+  :host(.tbr-loaded) .tbr-shimmer {
     opacity: 0;
   }
 
-  :host(.tbr-has-intermediate) .shimmer {
+  :host(.tbr-has-intermediate) .tbr-shimmer {
     opacity: 0;
   }
 
@@ -142,9 +128,9 @@ styles.replaceSync(`
     opacity: 0;
   }
 
-  /* ── spinner ──────────────────────────────────────── */
+  /* Spinner */
 
-  .spinner {
+  .tbr-spinner {
     position: absolute;
     inset: 0;
     display: flex;
@@ -156,7 +142,7 @@ styles.replaceSync(`
     z-index: 4;
   }
 
-  .spinner::after {
+  .tbr-spinner::after {
     content: "";
     width: 14px;
     height: 14px;
@@ -166,16 +152,16 @@ styles.replaceSync(`
     animation: tbr-spin 0.8s linear infinite;
   }
 
-  :host(.tbr-requested) .spinner,
-  :host(.tbr-intermediate) .spinner {
+  :host(.tbr-requested) .tbr-spinner,
+  :host(.tbr-intermediate) .tbr-spinner {
     opacity: 1;
   }
 
-  :host(.tbr-loaded) .spinner {
+  :host(.tbr-loaded) .tbr-spinner {
     opacity: 0;
   }
 
-  /* ── keyframes ────────────────────────────────────── */
+  /* Keyframes */
 
   @keyframes tbr-shimmer {
     0%, 100% { filter: brightness(1); }
@@ -192,38 +178,26 @@ styles.replaceSync(`
   }
 `);
 
-// ── constants ─────────────────────────────────────────────────────────────
+// Placeholder constants
 
 const PLACEHOLDER_SVG =
   "data:image/svg+xml," +
   encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 3"><rect fill="#2a2d4a" width="4" height="3"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 5 4"><rect fill="#2a2d4a" width="5" height="4"/></svg>',
   );
 
 const CLEAR_PIXEL =
   "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
-// ── blob URL cache ────────────────────────────────────────────────────────
-
-const _blobCache = new Map<number, string>();
-
-function cachedBlobUrl(key: number, bytes: Uint8Array): string {
-  const existing = _blobCache.get(key);
-  if (existing) return existing;
-  const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "image/jpeg" }));
-  _blobCache.set(key, url);
-  return url;
-}
-
-// ── custom element ────────────────────────────────────────────────────────
-
-const TAG_NAME = "thumbrella-thumb";
+//
+// Exports
+//
 
 /**
- * `<thumbrella-thumb>` — a self-contained thumbnail element.
+ * `<tbr-thumb>` — a self-contained thumbnail element.
  *
  * Uses Shadow DOM for style encapsulation. Automatically requests a
- * thumbnail from the configured Thumbrella server when its `url` attribute
+ * thumbnail from the configured Thumbrella server when its `src` attribute
  * is set or changed.
  *
  * Fires a `tbr:loaded` custom event when the thumbnail arrives (success or
@@ -232,15 +206,15 @@ const TAG_NAME = "thumbrella-thumb";
  *
  * Usage:
  * ```html
- * <thumbrella-thumb
- *   url="https://example.com/model.glb"
+ * <tbr-thumb
+ *   src="https://example.com/model.glb"
  *   connect="https://thumbrella.dev/api"
- *   style="width: 200px; height: 150px;"
- * ></thumbrella-thumb>
+ *   style="width: 200px;">
+ * </tbr-thumb>
  * ```
  */
-export class ThumbrellaThumb extends HTMLElement {
-  static observedAttributes = ["url", "connect", "lazy"];
+export class TbrThumb extends HTMLElement {
+  static observedAttributes = ["src", "connect", "lazy"];
 
   #shadow: ShadowRoot;
   #placeholderImg!: HTMLImageElement;
@@ -261,7 +235,7 @@ export class ThumbrellaThumb extends HTMLElement {
   }
 
   attributeChangedCallback(name: string, _old: string | null, newVal: string | null): void {
-    if (name === "url" && newVal !== this.#url) {
+    if (name === "src" && newVal !== null && newVal !== this.#url) {
       this.#url = newVal;
       this.#loaded = false;
       this.#pending = false;
@@ -274,7 +248,6 @@ export class ThumbrellaThumb extends HTMLElement {
       this.#load();
     }
     if (name === "connect") {
-      // If the connect string changes, invalidate any pending request.
       if (this.#pending) {
         this.#pending = false;
       }
@@ -282,7 +255,7 @@ export class ThumbrellaThumb extends HTMLElement {
     }
   }
 
-  // ── internal DOM ──────────────────────────────────────────────────────
+  // Internal DOM
 
   #render(): void {
     const name = this.getAttribute("alt") || this.#url || "";
@@ -291,15 +264,15 @@ export class ThumbrellaThumb extends HTMLElement {
     this.#shadow.innerHTML = `
       <img class="tbr-placeholder" src="${PLACEHOLDER_SVG}" alt="${escaped}" loading="lazy" decoding="async" />
       <img class="tbr-final" src="${CLEAR_PIXEL}" alt="" loading="lazy" decoding="async" />
-      <div class="shimmer" aria-hidden="true"></div>
-      <div class="spinner" aria-hidden="true"></div>
+      <div class="tbr-shimmer" aria-hidden="true"></div>
+      <div class="tbr-spinner" aria-hidden="true"></div>
     `;
 
     this.#placeholderImg = this.#shadow.querySelector(".tbr-placeholder")!;
     this.#finalImg = this.#shadow.querySelector(".tbr-final")!;
   }
 
-  // ── loading ───────────────────────────────────────────────────────────
+  // Loading
 
   async #load(): Promise<void> {
     if (!this.isConnected || !this.#url || this.#loaded || this.#pending) return;
@@ -319,7 +292,7 @@ export class ThumbrellaThumb extends HTMLElement {
       if (hit) {
         const blobUrl = URL.createObjectURL(new Blob([hit as BlobPart], { type: "image/jpeg" }));
         this.#finalImg.src = blobUrl;
-        this.classList.add("tbr-loaded", "tbr-success", "tbr-source-cache");
+        this.classList.add("tbr-loaded", "tbr-success");
         this.#loaded = true;
         this.#pending = false;
         this.dispatchEvent(
@@ -338,17 +311,14 @@ export class ThumbrellaThumb extends HTMLElement {
 
     try {
       for await (const result of client.stream([this.#url])) {
-        // Handle intermediate (streaming preview).
         if (result.status === Status.INTERMEDIATE) {
           this.classList.add("tbr-intermediate");
           this.#applyIntermediate(result);
           continue;
         }
 
-        // Handle final result.
         if (result.status === Status.SUCCESS && result.media?.thumbnail) {
           const bytes = result.media.thumbnail.bytes;
-          // Store in caches.
           for (const cache of allCaches) {
             try { await cache.set(cacheKey, bytes); } catch { /* best-effort */ }
           }
@@ -357,8 +327,7 @@ export class ThumbrellaThumb extends HTMLElement {
         this.#applyResult(result);
       }
     } catch {
-      this.classList.add("tbr-loaded", "tbr-unavailable");
-      this.#loaded = true;
+      this.#applyResult(Result.clientFail(this.#url!, "server unreachable"));
     }
 
     this.#pending = false;
@@ -367,7 +336,7 @@ export class ThumbrellaThumb extends HTMLElement {
   #applyIntermediate(result: import("./types.js").Result): void {
     const thumb = result.media?.thumbnail;
     if (!thumb) return;
-    const isPlaceholder = result.source === "placeholder";
+    const isPlaceholder = !!result.media?.placeholder;
     const blobUrl = isPlaceholder
       ? cachedBlobUrl(thumb.key, thumb.bytes)
       : URL.createObjectURL(new Blob([thumb.bytes as BlobPart], { type: "image/jpeg" }));
@@ -378,14 +347,12 @@ export class ThumbrellaThumb extends HTMLElement {
   #applyResult(result: import("./types.js").Result): void {
     this.classList.remove("tbr-requested");
     this.classList.add("tbr-loaded", "tbr-" + result.status.toLowerCase());
-    if (result.source) this.classList.add("tbr-source-" + result.source);
-
     this.#loaded = true;
 
     const thumb = result.media?.thumbnail;
     if (thumb) {
       const { bytes, key } = thumb;
-      const isPlaceholder = result.source === "placeholder";
+      const isPlaceholder = !!result.media?.placeholder;
       const blobUrl = isPlaceholder
         ? cachedBlobUrl(key, bytes)
         : URL.createObjectURL(new Blob([bytes as BlobPart], { type: "image/jpeg" }));
@@ -404,20 +371,18 @@ export class ThumbrellaThumb extends HTMLElement {
           duration: result.duration ?? null,
           message: result.message ?? null,
           bytes: thumb?.bytes.length ?? 0,
-          placeholder: result.source === "placeholder",
+          placeholder: !!result.media?.placeholder,
         },
       }),
     );
   }
 
-  // ── connect resolution ────────────────────────────────────────────────
+  // Connect resolution
 
   #resolveConnect(): string | undefined {
-    // 1. Own attribute.
     const attr = this.getAttribute("connect");
     if (attr) return attr;
 
-    // 2. Nearest ancestor with data-tbr-connect.
     let parent = this.parentElement;
     while (parent) {
       const p = (parent as HTMLElement).dataset.tbrConnect;
@@ -429,27 +394,144 @@ export class ThumbrellaThumb extends HTMLElement {
       }
     }
 
-    // 3. Global.
     return resolveGlobalConnect();
   }
 }
 
-// ── auto-register ─────────────────────────────────────────────────────────
-
-let _registered = false;
-
-/**
- * Register the `<thumbrella-thumb>` custom element.
- *
- * Called automatically when this module is imported.  Safe to call
- * multiple times — subsequent calls are no-ops.
- */
-export function define(): void {
-  if (_registered) return;
-  if (typeof customElements === "undefined") return;
-  customElements.define(TAG_NAME, ThumbrellaThumb);
-  _registered = true;
+/** Configuration for {@link tbrSetup} (full form — use when you need `persist`). */
+export interface SetupConfig {
+  connect?: string;
+  persist?: number | boolean;
 }
 
-// Auto-register on import.
-define();
+/**
+ * Activate Thumbrella on the current page.
+ *
+ * Registers `<tbr-thumb>`, configures global defaults, and injects CSS for
+ * styles.  Call once — subsequent calls are no-ops.
+ *
+ * The common case is a connect string:
+ * ```ts
+ * import { tbrSetup } from "@thumbrella/client/element";
+ * tbrSetup("https://thumbrella.dev/api");
+ * ```
+ *
+ * For IndexedDB persistence, pass a config object instead:
+ * ```ts
+ * tbrSetup({ connect: "https://thumbrella.dev/api", persist: 10 });
+ * ```
+ *
+ * With no arguments, reads `data-tbr-connect` and `data-tbr-persist` from
+ * the loading `<script>` tag if present.
+ */
+export function tbrSetup(connectOrOpts?: string | SetupConfig): void {
+  if (_booted || typeof document === "undefined") return;
+  _booted = true;
+
+  const scriptDs = findScript()?.dataset ?? {};
+
+  // Resolve connect: explicit string > opts.connect > script attribute > undefined
+  const explicitConnect = typeof connectOrOpts === "string"
+    ? connectOrOpts
+    : connectOrOpts?.connect ?? scriptDs.tbrConnect;
+
+  if (explicitConnect && typeof window !== "undefined") {
+    (window as unknown as Record<string, string>).TBR_CONNECT = explicitConnect;
+  }
+
+  // Persist only available via opts object or script attribute.
+  const persist = typeof connectOrOpts === "object"
+    ? connectOrOpts.persist
+    : scriptDs.tbrPersist;
+
+  if (persist !== undefined && persist !== false) {
+    const mb = typeof persist === "number" ? persist : 5;
+    enablePersistentCache(mb);
+  }
+
+  configure({ connect: explicitConnect });
+
+  if (typeof customElements !== "undefined") {
+    customElements.define("tbr-thumb", TbrThumb);
+  }
+
+  injectStyles();
+}
+
+// Convenience re-exports for bundler users who only import element.js.
+export { Client, parseConnect } from "./api.js";
+export { createMemoryCache } from "./cache.js";
+
+//
+// Internal helpers
+//
+
+function getSharedClient(): Client {
+  if (!_sharedClient) {
+    _sharedCaches = [createMemoryCache()];
+    _sharedClient = new Client({
+      connect: resolveGlobalConnect(),
+      cacheBackends: _sharedCaches,
+    });
+  }
+  return _sharedClient;
+}
+
+function resolveGlobalConnect(): string | undefined {
+  if (typeof window !== "undefined") {
+    return (window as unknown as Record<string, string>).TBR_CONNECT;
+  }
+  return undefined;
+}
+
+function cachedBlobUrl(key: number, bytes: Uint8Array): string {
+  const existing = _blobCache.get(key);
+  if (existing) return existing;
+  const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "image/jpeg" }));
+  _blobCache.set(key, url);
+  return url;
+}
+
+function findScript(): HTMLScriptElement | null {
+  if (typeof document === "undefined") return null;
+  if (document.currentScript) return document.currentScript as HTMLScriptElement;
+  return document.querySelector<HTMLScriptElement>("script[data-tbr-connect]");
+}
+
+function injectStyles(): void {
+  if (typeof document === "undefined") return;
+  const id = "tbr-light-dom-styles";
+  if (document.getElementById(id)) return;
+
+  const style = document.createElement("style");
+  style.id = id;
+  // language=CSS
+  style.textContent = `
+.tbr-kit {
+  display: block;
+  position: relative;
+  overflow: hidden;
+  background: var(--tbr-bg, #0d1225);
+  width: 250px;
+  aspect-ratio: 5 / 4;
+}
+.tbr-kit img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.tbr-placeholder { z-index: 1; }
+.tbr-final { z-index: 3; opacity: 0; transition: opacity 0.35s ease; }
+.tbr-loaded .tbr-final { opacity: 1; }
+.tbr-loaded .tbr-placeholder { opacity: 0; }`;
+
+  document.head.appendChild(style);
+}
+
+// Auto-setup when loaded via <script> with data-tbr-connect
+if (findScript()) {
+  tbrSetup();
+}

@@ -254,16 +254,14 @@ class Client:
 
         msg = ""
         try:
-            async for item in aio_ndjson(
+            async for result_data in aio_ndjson(
                 self._asession, self.host_name, self.base_url, "/batch",
                 json={"items": stale}, headers={"Accept": "application/x-ndjson"},
             ):
-                kind = item.get("type", "")
-                result_data = item.get("result")
-                if not result_data or kind not in ("item.intermediate", "item.result"):
-                    continue
                 item_url = result_data.get("url", "")
-                if kind == "item.result":
+                if not item_url or "status" not in result_data:
+                    continue
+                if result_data.get("status") != Status.INTERMEDIATE:
                     pending.discard(item_url)
                 result = _result_from_server(
                     result_data, caches=self.caches, server_key=self.base_url
