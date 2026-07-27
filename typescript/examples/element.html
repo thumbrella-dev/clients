@@ -37,15 +37,7 @@
 <figcaption>neon-block.png</figcaption></figure>
 
 
-
-<script type="module">
-    import { tbrSetup } from "../dist/element.js";
-    tbrSetup("http://127.0.0.1:8790/");
-</script>
-
-
 <!-- 
-
 To use for yourself, the import path should be changed to a CDN delivery 
 platform, like 'https://cdn.jsdelivr.net/npm/@thumbrella/client@1/+esm'
 
@@ -54,8 +46,11 @@ connect argument to your own running server, or your auth token for
 Thumbrella Cloud.
 
 More documentation is at https://thumbrella.dev/docs/client/
-
 -->
 
+<script type="module">
+    import { tbrSetup } from "../dist/element.js";
+    tbrSetup("http://127.0.0.1:8790/");
+</script>
 
 </body></html>

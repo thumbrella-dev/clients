@@ -29,10 +29,10 @@
 <h1>Browser API Demo</h1>
 <p>Shows individual results from streaming batch request.</p>
 
-<textarea id="urls">http://127.0.0.1:8790/media/space-colony.jpg
-http://127.0.0.1:8790/media/stanford-bunny.stl
-http://127.0.0.1:8790/media/harbor-trucks.mp4
-http://127.0.0.1:8790/media/missing-file</textarea>
+<textarea id="urls">https://demo.thumbrella.dev/media/space-colony.jpg
+https://demo.thumbrella.dev/media/stanford-bunny.stl
+https://demo.thumbrella.dev/media/harbor-trucks.mp4
+https://demo.thumbrella.dev/media/missing-file</textarea>
 <br/>
 <button id="stream-btn">Stream results</button>
 <button id="clear-btn">Clear cache</button>
@@ -46,14 +46,30 @@ http://127.0.0.1:8790/media/missing-file</textarea>
 
 <div id="busy" style="display:none;"><span class="spinner"></span>Streaming…</div>
 
+
+<!-- 
+To use for yourself, the import path should be changed to a CDN delivery 
+platform, like 'https://cdn.jsdelivr.net/npm/@thumbrella/client@1/+esm'
+
+For media outside demo.thumbrella.dev you must set the 
+connect argument to your own running server, or your auth token for 
+Thumbrella Cloud.
+
+More documentation is at https://thumbrella.dev/docs/client/
+-->
+
 <script type="module">
   import { Client, createMemoryCache, createThumbImg } from "../dist/browser.js";
 
 
   // Thumbrella setup //
+  /* This uses the Thumbrella Demo site which works for free for any of the */
+  /* media it hosts. Switch to a self hosted server or your Thumbrella Cloud */
+  /* auth token to thumbnail anything.  */
+
   const cache = createMemoryCache();
   const tbrClient = new Client({
-    connect: "http://127.0.0.1:8790",
+    connect: "https://demo.thumbrella.dev",
     cacheBackends: [cache],
   });
 
