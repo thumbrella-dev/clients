@@ -190,20 +190,23 @@ pub struct Media {
     #[serde(default)]
     pub properties: serde_json::Value,
     #[serde(default)]
-    pub cache: Option<String>,
+    pub cache: String,
+    #[serde(default)]
+    pub placeholder: String,
 }
 
 impl Media {
     pub fn is_fresh(&self) -> bool {
-        if let Some(ref cache) = self.cache {
-            if let Some((epoch_hex, _)) = cache.split_once(':') {
-                if let Ok(expires) = u64::from_str_radix(epoch_hex, 16) {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
-                    return expires > 0 && expires > now;
-                }
+        if self.cache.is_empty() {
+            return false;
+        }
+        if let Some((epoch_hex, _)) = self.cache.split_once(':') {
+            if let Ok(expires) = u64::from_str_radix(epoch_hex, 16) {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                return expires > 0 && expires > now;
             }
         }
         false
@@ -247,9 +250,9 @@ pub struct ResultData {
     #[serde(default)]
     pub message: Option<String>,
     #[serde(default)]
-    pub placeholder: Option<String>,
-    #[serde(default)]
     pub source: Option<String>,
+    #[serde(default, rename = "http_status")]
+    pub http_status: Option<u16>,
     #[serde(default)]
     pub media: Option<Media>,
     /// Raw server JSON.
@@ -265,8 +268,8 @@ impl ResultData {
             duration: 0.0,
             download_size: 0,
             message: None,
-            placeholder: None,
             source: Some(source::CLIENT.to_string()),
+            http_status: None,
             media: None,
             raw: serde_json::Value::Null,
         }

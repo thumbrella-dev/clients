@@ -8,7 +8,7 @@ use std::time::Duration;
 use crate::cache::{Cache, MemoryCache};
 use crate::types::*;
 
-const DEFAULT_BASE: &str = "http://api.thumbrella.dev/";
+const DEFAULT_BASE: &str = "http://cloud.thumbrella.dev/";
 const HTTP_TIMEOUT_SECS: u64 = 12;
 const MAX_BACKOFF_SECS: u64 = 60;
 
@@ -302,8 +302,8 @@ impl Client {
             let mut item = serde_json::json!({ "url": url });
             for cache in &self.caches {
                 if let Some(cached) = cache.get(url) {
-                    if let Some(ref cache_str) = cached.cache {
-                        item["cache"] = serde_json::Value::String(cache_str.clone());
+                    if !cached.cache.is_empty() {
+                        item["cache"] = serde_json::Value::String(cached.cache.clone());
                         break;
                     }
                 }
