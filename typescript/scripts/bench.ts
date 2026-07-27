@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * bench.ts — Thumbrella API benchmarking tool
+ * bench.ts   Thumbrella API benchmarking tool
  *
  * Uses the @thumbrella/client library to send batch requests and report timing.
  *
@@ -9,7 +9,7 @@
  *                            [--full] [--warmup] [--json] [--label <name>]
  *
  * <connect> is an optional positional connect string (default: $TBR_CONNECT or
- * https://api.thumbrella.dev).  Fetches the demo index to get media URLs, then
+ * https://cloud.thumbrella.dev).  Fetches the demo index to get media URLs, then
  * sends batch requests through the Client.  Verifies the server before starting.
  *
  * --warmup runs one silent pass over all URLs before the timed benchmark, to
@@ -22,7 +22,7 @@
 // import { Client, Result, Status, Source } from "@thumbrella/client";
 import { Client, Result, Status, Source } from "../src/index.ts";
 
-// ── CLI parsing ──────────────────────────────────────────────────────────
+//  CLI parsing 
 
 interface Options {
   connect: string;
@@ -69,7 +69,7 @@ function parseArgs(): Options {
       case "--help":
       case "-h":
         console.log(`Usage: bench.ts [<connect>] [--batch <n>] [--rounds <n>] [--full] [--warmup] [--json] [--label <name>]`);
-        console.log(`  <connect>   Connect string (default: env TBR_CONNECT or https://api.thumbrella.dev)`);
+        console.log(`  <connect>   Connect string (default: env TBR_CONNECT or https://cloud.thumbrella.dev)`);
         console.log(`  --batch     Number of URLs per batch request (default: 5)`);
         console.log(`  --rounds    Number of times to repeat the full set (default: 1)`);
         console.log(`  --full      Print per-item timing using server-reported duration`);
@@ -82,7 +82,7 @@ function parseArgs(): Options {
   return opts;
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────
+//  Helpers 
 
 const INDEX_URL = "https://demo.thumbrella.dev";
 
@@ -107,7 +107,7 @@ async function fetchIndex(): Promise<{ mediaTemplate: string; files: IndexEntry[
   return { mediaTemplate: index.media, files: index.files };
 }
 
-// ── Warmup ───────────────────────────────────────────────────────────────
+//  Warmup
 
 async function warmup(tbr: Client, urls: string[], batchSize: number): Promise<void> {
   if (!opts.warmup) return;
@@ -121,7 +121,7 @@ async function warmup(tbr: Client, urls: string[], batchSize: number): Promise<v
   process.stderr.write(" done\n");
 }
 
-// ── Main ─────────────────────────────────────────────────────────────────
+//  Main
 
 // Hold a module-level reference so warmup() can access opts.
 let opts: Options;
@@ -139,7 +139,7 @@ async function main() {
     console.log(`Benchmark ${urls.length} media for ${tbr.baseUrl}`);
   }
 
-  // Warmup pass — absorbs cold starts before timed runs.
+  // Warmup pass, absorbs cold starts before timed runs.
   await warmup(tbr, urls, opts.batchSize);
 
   let totalOk = 0;

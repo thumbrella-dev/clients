@@ -1,11 +1,14 @@
-//! stream.rs — show progress on thumbnail rendering (batch mode).
+//! stream.rs  show progress on thumbnail rendering (batch mode).
+//!
+//! Note: true NDJSON streaming is not yet implemented in the Rust client.
+//! This example uses `batch()` instead, which waits for all results.
 //!
 //! Usage:
-//!     cargo run --example stream https://www.python.org/static/img/python-logo.png https://docs.github.com/en/get-started/git-basics/setting-your-username-in-git
+//!     cargo run --example stream https://www.python.org/static/img/python-logo.png https://docs.github.com/en/get-started
 
 use std::env;
 use std::time::Instant;
-use thumbrella::Client;
+use thumbrella_client::Client;
 
 #[tokio::main]
 async fn main() {
@@ -28,7 +31,7 @@ async fn main() {
     }
 
     let start = Instant::now();
-    match tbr.stream(&urls).await {
+    match tbr.batch(&urls).await {
         Ok(results) => {
             for result in &results {
                 let elapsed = start.elapsed().as_millis();

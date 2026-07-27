@@ -19,7 +19,7 @@ class Client:
 
     A centralized configuration for a Thumbrella server and client side caches.
     The connection is described by a "connect string". By default this uses the
-    ``$TBR_CONNECT`` envirionment variable.
+    ``$TBR_CONNECT`` environment variable.
 
     Most thumbnails will be handled in batches with the ``batch()`` or
     ``stream()`` methods. These will return (or iterate) a set of ``Result``
@@ -27,8 +27,8 @@ class Client:
     result objects will have a placeholder or failure image, even if one could
     not be rendered.
 
-    The ``stream()`` is asyncronous and requires an additional optional
-    dependency on `aiohttp`.     
+    The ``stream()`` is asynchronous and requires an additional optional
+    dependency on `aiohttp`.
 
     Creating the client makes no immediate connection to the server. When a
     connection is misconfigured calls will still provide ``Result`` objects with
@@ -39,7 +39,7 @@ class Client:
     A collection of caches can be passed to the client. These are integrated
     with each of the lookup methods to improve performance. By default the
     client will use a single ``MemoryCache`` with the default settings. A client
-    can also be created with no caching by explictly passing an empty sequence
+    client can also be created with no caching by explicitly passing an empty sequence
     for the ``caches`` argument.
 
     This exposes a ``session`` attribute. This a ``requests.Session` object that
@@ -111,7 +111,7 @@ class Client:
                 "connect server not responding"
             ) from exc
         except ValueError:
-            # Non-JSON response — the server at the other end isn't thumbrella.
+            # Non-JSON response, the server at the other end isn't thumbrella.
             raise VerifyError("connect is not a thumbrella server") from None
         except requests.RequestException as exc:
             raise VerifyError(
@@ -139,7 +139,7 @@ class Client:
         Individual results can get the same effect by using `Result.verify`.
 
         This call waits for the result to complete before returning. It is
-        syncronous and blocking.
+        synchronous and blocking.
 
         See the https://thumbrella.dev/docs/api/batch.html server documentation
         on the batch call for more details on how the server processes these
@@ -164,7 +164,7 @@ class Client:
         results are provided in the same order as the input urls.
 
         This call waits for all results to complete before returning. It is
-        syncronous and blocking. For incremental results, see the `stream()`
+        synchronous and blocking. For incremental results, see the `stream()`
         method.
 
         This call won't raise exceptions. On errors, results will be marked
@@ -216,12 +216,12 @@ class Client:
         processed. That can be determined with `Result.status` being
         `thumbrella.Status.INTERMEDIATE`.
 
-        Python asyncronous code should often use a context to help control
-        lifetime of resources and processing with the ``async wait`` or
+        Python asynchronous code should often use a context to help control
+        lifetime of resources and processing with the ``async with`` or
         ``async for`` operators.
-        
+
         The ``session`` attribute used to customize the http operations is
-        not used natively by aiiohttp. The major information is transalted
+        not used natively by aiohttp. The major information is translated
         to ``aiohttp`` but not all features are expected to work.
 
         See the https://thumbrella.dev/docs/api/batch.html server documentation
@@ -310,7 +310,7 @@ def _client_user_agent() -> str:
     return f"thumbrella-python/{ver}"
 
 
-# Per-server placeholder thumbnail cache — permanent, keyed by connect string.
+# Per-server placeholder thumbnail cache, permanent, keyed by connect string.
 _PLACEHOLDER_CACHE: dict[str, dict[str, EncodedJpeg]] = {}
 
 
@@ -407,7 +407,7 @@ def _preflight_urls(
     stale: list[dict[str, str]] = []
 
     for url in urls:
-        # Basic URL validation — must have a scheme.
+        # Basic URL validation, must have a scheme.
         if not url or "://" not in url:
             done[url] = Result.client_fail(url, "invalid URL")
             continue
@@ -425,7 +425,7 @@ def _preflight_urls(
         if fresh:
             continue
 
-        # Stale — build the server request.  Include the cache token
+        # Stale, build the server request.  Include the cache token
         # from any cached media so the server can do a conditional revalidation.
         item: dict[str, str] = {"url": url}
         for cache in caches:

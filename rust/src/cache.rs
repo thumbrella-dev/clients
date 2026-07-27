@@ -1,4 +1,4 @@
-//! Result caches — reduce server round-trips for repeated URLs.
+//! Result caches, reduce server round-trips for repeated URLs.
 //!
 //! Caches are passed to the [`Client`](crate::Client) when constructed.
 //! Each client works with a stack of cache objects, and will use a small
@@ -15,7 +15,7 @@ use std::sync::Mutex;
 
 use crate::types::Media;
 
-/// Abstract base for result caches — stores [`Media`] entries keyed by URL.
+/// Abstract base for result caches, stores [`Media`] entries keyed by URL.
 pub trait Cache: Send + Sync {
     /// Get the possible cached media for a URL.
     fn get(&self, url: &str) -> Option<Media>;
@@ -27,6 +27,10 @@ pub trait Cache: Send + Sync {
     fn reset(&self);
     /// Number of cached entries.
     fn len(&self) -> usize;
+    /// True when the cache has no entries.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
     /// Number of cache hits since creation or last reset.
     fn hits(&self) -> u64;
     /// Number of cache misses since creation or last reset.
@@ -97,11 +101,10 @@ impl Cache for MemoryCache {
 
         if store.contains_key(&url) {
             order.retain(|u| u != &url);
-        } else if store.len() >= self.max_items {
-            if let Some(stale) = order.pop() {
+        } else if store.len() >= self.max_items
+            && let Some(stale) = order.pop() {
                 store.remove(&stale);
             }
-        }
         store.insert(url.clone(), media.clone());
         order.insert(0, url);
     }

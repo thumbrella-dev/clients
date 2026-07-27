@@ -1,11 +1,11 @@
-//! Types and constants — mirror the server wire format.
+//! Types and constants, mirror the server wire format.
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-// ── status constants ─────────────────────────────────────────────────────
+//  status constants
 
 pub mod status {
     pub const SUCCESS: &str = "success";
@@ -16,13 +16,13 @@ pub mod status {
     pub const UNAVAILABLE: &str = "unavailable";
 }
 
-// ── source constants ─────────────────────────────────────────────────────
+//  source constants
 
 pub mod source {
     pub const RENDER: &str = "render";
     pub const SHORTCUT: &str = "shortcut";
     pub const CACHE: &str = "cache";
-    /// Client cache hints were valid — no new thumbnail needed.
+    /// Client cache hints were valid, no new thumbnail needed.
     pub const NOT_MODIFIED: &str = "not_modified";
     /// A registered renderer tried but could not handle this format.
     pub const FALLBACK: &str = "fallback";
@@ -32,7 +32,7 @@ pub mod source {
     pub const CLIENT: &str = "client";
 }
 
-// ── errors ───────────────────────────────────────────────────────────────
+//  errors
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -52,11 +52,11 @@ pub enum Error {
     Http(u16, String),
 }
 
-// ── Thumbnail ────────────────────────────────────────────────────────────
+//  Thumbnail 
 
 /// Binary JPEG thumbnail data.
 ///
-/// This represents the encoded JPEG data stream — not pixel data.  It can
+/// This represents the encoded JPEG data stream, not pixel data.  It can
 /// be shared across multiple `Media` objects via `Arc` to make placeholder
 /// images more efficient.
 ///
@@ -68,7 +68,7 @@ pub enum Error {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub struct Thumbnail {
-    /// Shared JPEG bytes — cloning is cheap (Arc).
+    /// Shared JPEG bytes, cloning is cheap (Arc).
     data: Arc<Vec<u8>>,
     /// Pre-computed content hash for fast Map lookups.
     hash: u64,
@@ -133,9 +133,7 @@ impl From<Vec<u8>> for Thumbnail {
 impl From<String> for Thumbnail {
     fn from(b64: String) -> Self {
         base64::engine::general_purpose::STANDARD
-            .decode(&b64)
-            .map(Vec::from)
-            .unwrap_or_default()
+            .decode(&b64).unwrap_or_default()
             .into()
     }
 }
@@ -158,7 +156,7 @@ impl std::fmt::Debug for Thumbnail {
     }
 }
 
-// ── Media ────────────────────────────────────────────────────────────────
+//  Media 
 
 /// Data from the [`ResultData`] that describes the source media.
 ///
@@ -213,7 +211,7 @@ impl Media {
     }
 }
 
-// ── Result ───────────────────────────────────────────────────────────────
+//  Result
 
 /// Result for every URL.
 ///
@@ -225,7 +223,7 @@ impl Media {
 /// Comparing against the [`status`] constants is the best way to branch on
 /// outcome.
 ///
-/// The top-level fields represent the process of generating the result —
+/// The top-level fields represent the process of generating the result,
 /// whether the operation was successful, how caching was involved, and the
 /// operations used by either the client or server.
 ///
@@ -250,6 +248,8 @@ pub struct ResultData {
     #[serde(default)]
     pub message: Option<String>,
     #[serde(default)]
+    pub http_status: Option<u16>,
+    #[serde(default)]
     pub source: Option<String>,
     #[serde(default, rename = "http_status")]
     pub http_status: Option<u16>,
@@ -268,6 +268,7 @@ impl ResultData {
             duration: 0.0,
             download_size: 0,
             message: None,
+            http_status: None,
             source: Some(source::CLIENT.to_string()),
             http_status: None,
             media: None,
@@ -276,7 +277,7 @@ impl ResultData {
     }
 
     pub fn is_fresh(&self) -> bool {
-        self.media.as_ref().map_or(false, |m| m.is_fresh())
+        self.media.as_ref().is_some_and(|m| m.is_fresh())
     }
 
     pub fn is_success(&self) -> bool {
@@ -290,7 +291,7 @@ impl ResultData {
     }
 }
 
-// ── Wire helpers ─────────────────────────────────────────────────────────
+//  Wire helpers
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct BatchResponse {

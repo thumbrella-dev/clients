@@ -32,13 +32,13 @@ def parse_connect(
     if connect is None:
         connect = os.environ.get("TBR_CONNECT", DEFAULT_BASE)
 
-    # Bare value — no scheme.  Dispatch to auth or handshake by prefix.
+    # Bare value, no scheme.  Dispatch to auth or handshake by prefix.
     if "://" not in connect:
         if _is_auth_token(connect):
             session.headers["Authorization"] = f"Bearer {connect}"
         else:
             session.headers["x-tbr-handshake"] = connect
-        return DEFAULT_BASE, "api.thumbrella.dev:0"
+        return DEFAULT_BASE, "cloud.thumbrella.dev:0"
 
     segments = connect.split(",")
     server = segments[0].strip()
@@ -71,7 +71,7 @@ def requests_json(
     path: str,
     **kwargs: Any,
 ) -> Any:
-    """Manage blocking, syncronous http post through requests"""
+    """Manage blocking, synchronous http post through requests"""
     _check_backoff(host)
 
     url = base_url + path
@@ -99,7 +99,7 @@ async def aio_ndjson(
     path: str,
     **kwargs: Any,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Manage asyncronous streaming http post through aiiohttp"""
+    """Manage asynchronous streaming http post through aiohttp"""
     _check_backoff(host)
 
     url = base_url + path
@@ -136,7 +136,7 @@ async def aio_ndjson(
                     pass
 
 
-# Global backoff — shared across all Client instances.
+# Global backoff, shared across all Client instances.
 _host_backoff: dict[str, tuple[float, int]] = {}
 
 

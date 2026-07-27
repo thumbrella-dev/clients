@@ -15,8 +15,8 @@ from .cache import is_cache_fresh
 class Result:
     """Result for every url.
 
-    The result describes the operation for every thumbnail url. It handled both
-    successed and failures. There are two levels of fields on the result.
+    The result describes the operation for every thumbnail url. It handles both
+    successes and failures. There are two levels of fields on the result.
     
     The top level ``url`` attribute contains the origin url the request was made
     for.
@@ -56,8 +56,8 @@ class Result:
 
     """
     __slots__ = (
-        "url", "status", "message", "source", "duration", "download_size", 
-        "media", "raw", "__weakref__",    
+        "url", "status", "message", "source", "duration", "download_size",
+        "http_status", "media", "raw", "__weakref__",
     )
 
     def __init__(
@@ -74,6 +74,7 @@ class Result:
         self.source: str | None = data.get("source", Source.CLIENT)
         self.duration: float = float(data.get("duration", 0.0))
         self.download_size: int = int(data.get("download_size", 0))
+        self.http_status: int | None = data.get("http_status")
         self.media: Media | None = media
         self.raw: dict[str, Any] = data
         if not media:
@@ -106,8 +107,8 @@ class Result:
 
         Failed results will still contain a placeholder thumbnail image.
 
-        This can be checked more lightwight by comparing
-        ``result.status == thumbrella.Status.SUCCEEDED``.
+        This can be checked more lightweight by comparing
+        ``result.status == thumbrella.Status.SUCCESS``.
         """
         from .errors import ThumbError
 
@@ -129,19 +130,20 @@ class Media:
     The attributes are mostly mandatory. If the result has a ``media``
     attribute, then these fields will exist.
 
-    The ``properties`` represent optional and additional informatio 
+    The ``properties`` represent optional and additional information
     Thumbrella provides to describe the media. Each ``kind`` has a different
     schema for what could be included in the properties. For example, images
-    will come with ``width_pixels``, ``height_pixels`` and ``color_bpp``.
-    But these properties are still optional and may not always be included.
+    will come with ``width``, ``height``, ``bpp``, ``alpha``, and
+    ``lossless``. But these properties are still optional and may not always
+    be included.
     
-    Stable media identity — reusable, cacheable, hashable by content.
+    Stable media identity, reusable, cacheable, hashable by content.
 
     The ``thumbnail`` attribute will always be valid. This is a
     `EncodedJpeg` object that provides several conveniences for accessing
     the binary encoded image data. This thumbnail data can be shared across
     multiple instances of `Media` objects when it represents placeholder
-    iamges.
+    images.
 
     Media objects are only created from the `Client` object as part of
     a `Result`.
@@ -209,7 +211,7 @@ class EncodedJpeg:
     """Binary JPEG thumbnail data.
 
     This is the value for the ``Media.thumbnail`` attribute. It can be shared
-    across multiple medias to make placeholder images more efficient.
+    across multiple Media objects to make placeholder images more efficient.
 
     This represents the encoded jpeg data stream. It does not represent pixel or
     image data itself. It must be used with an image library that understands
