@@ -1,6 +1,6 @@
 {
   "name": "@thumbrella/client",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "description": "TypeScript client for the Thumbrella thumbnail API - typed results, streaming batches, pluggable caching",
   "type": "module",
   "main": "dist/index.js",
@@ -34,16 +34,15 @@
     "./styles.css": "./dist/styles.css"
   },
   "bin": {
-    "thumbrella-file": "./dist/bin/file.js"
+    "thumbrella-file": "dist/bin/file.js"
   },
   "files": [
     "dist/",
-    "README.md",
-    "LICENSE"
+    "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && node -e \"require('fs').cpSync('src/styles.css','dist/styles.css')\"",
-    "bench": "tsx scripts/bench.ts"
+    "build": "tsc -p tsconfig.json",
+    "bench": "npx tsx scripts/bench.ts"
   },
   "keywords": [
     "thumbrella",
@@ -55,20 +54,22 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/thumbrella-dev/thumbrella-clients.git",
+    "url": "git+https://github.com/thumbrella-dev/clients.git",
     "directory": "typescript"
   },
-  "homepage": "https://thumbrella.dev/",
+  "homepage": "https://thumbrella.dev",
   "bugs": {
-    "url": "https://github.com/thumbrella-dev/thumbrella-clients/issues"
+    "url": "https://github.com/thumbrella-dev/clients/issues"
   },
   "license": "Apache-2.0",
+  "sideEffects": false,
   "engines": {
     "node": ">=18"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
     "dotenv": "^16.4.5",
+    "tsx": "^4.23.0",
     "typescript": "^5.6.3"
   }
 }

@@ -1,5 +1,5 @@
 /**
- * Status and type constants — string-based for cross-language portability.
+ * Status and type constants, string-based for cross-language portability.
  */
 
 export const Status = {
@@ -7,7 +7,7 @@ export const Status = {
   FAILED: "failed",
   OVERLOADED: "overloaded",
   INTERMEDIATE: "intermediate",
-  /** Client-side only — server was unreachable. */
+  /** Client-side only, server was unreachable. */
   UNAVAILABLE: "unavailable",
 } as const;
 export type Status = (typeof Status)[keyof typeof Status];
@@ -16,13 +16,13 @@ export const Source = {
   RENDER: "render",
   SHORTCUT: "shortcut",
   CACHE: "cache",
-  /** Client cache hints were valid — no new thumbnail needed. */
+  /** Client cache hints were valid, no new thumbnail needed. */
   NOT_MODIFIED: "not_modified",
   /** A registered renderer tried but could not handle this format. */
   FALLBACK: "fallback",
   /** No renderer was registered for this format at all. */
   PLACEHOLDER: "placeholder",
-  /** Client-side only — synthetic, not from server. */
+  /** Client-side only, synthetic, not from server. */
   CLIENT: "client",
 } as const;
 export type Source = (typeof Source)[keyof typeof Source];
@@ -41,13 +41,13 @@ export const FileKind = {
 } as const;
 export type FileKind = (typeof FileKind)[keyof typeof FileKind];
 
-// EncodedJpeg
+//  EncodedJpeg 
 
 /**
  * Binary JPEG thumbnail data.
  *
  * This is the value for the `media.thumbnail` attribute. It can be shared
- * across multiple medias to make placeholder images more efficient.
+ * across multiple Media objects to make placeholder images more efficient.
  *
  * This represents the encoded JPEG data stream. It does not represent pixel
  * or image data itself.
@@ -98,7 +98,7 @@ export class EncodedJpeg {
     return 0;
   }
 
-  /** Stable content hash — use as a Map key for image caching. */
+  /** Stable content hash, use as a Map key for image caching. */
   get key(): number {
     if (this._hash === null) {
       const b = this.bytes;
@@ -112,7 +112,7 @@ export class EncodedJpeg {
   }
 }
 
-// Media
+//  Media 
 
 /**
  * Data from the {@link Result} that describes the source media.
@@ -153,9 +153,7 @@ export class Media {
   extension: string;
   /** Format-specific metadata (dimensions, colour depth, …). */
   properties: Record<string, number>;
-  /** Cache token: `"<hex_epoch>:<blob>"`, empty = do not cache. */
   cache: string;
-  /** Non-empty when this is a shared placeholder / fallback image. */
   placeholder: string;
 
   constructor(data: Record<string, unknown>) {
@@ -183,7 +181,7 @@ export class Media {
   }
 }
 
-// Result
+//  Result
 
 /**
  * Result for every URL.
@@ -327,7 +325,7 @@ export class Result {
   }
 }
 
-// Errors
+//  Errors
 
 export class ThumbError extends Error {
   constructor(message: string) {

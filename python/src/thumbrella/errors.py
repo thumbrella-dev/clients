@@ -18,7 +18,7 @@ class ServerError(ThumbError):
 
 
 class VerifyError(ThumbError):
-    """``Client.verify()`` failed — server is misconfigured or unreachable."""
+    """``Client.verify()`` failed, server is misconfigured or unreachable."""
 
 
 class TimeoutError(ThumbError):

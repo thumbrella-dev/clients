@@ -11,27 +11,62 @@ import {
   TimeoutError,
 } from "./types.js";
 
-// Module state
+//  constants 
 
-const DEFAULT_BASE = "http://cloud.thumbrella.dev/";
+const DEFAULT_BASE = "https://cloud.thumbrella.dev/";
 const MAX_BACKOFF_MS = 60_000;
 const HTTP_TIMEOUT_MS = 12_000;
 
+//  global backoff
+
 const _backoff = new Map<string, { until: number; failures: number }>();
 
-const placeholderCache = new Map<string, Map<string, EncodedJpeg>>();
+function checkBackoff(host: string): void {
+  const state = _backoff.get(host);
+  if (state && Date.now() < state.until) {
+    throw new ConnectionError(`${host} is throttled, retry later`);
+  }
+}
 
-//
-// Exports
-//
+function recordBackoff(host: string, throttled: boolean): void {
+  if (throttled) {
+    const state = _backoff.get(host);
+    const failures = (state?.failures ?? 0) + 1;
+    const delay = Math.min(2 ** failures * 1000, MAX_BACKOFF_MS);
+    _backoff.set(host, { until: Date.now() + delay, failures });
+  } else {
+    _backoff.delete(host);
+  }
+}
+
+//  helpers
+
+/** True when a value looks like a Thumbrella auth token (`tbr_[a-z]_` prefix). */
+function isAuthToken(s: string): boolean {
+  return /^tbr_[a-z]_/.test(s);
+}
+
+//  connect string parsing
+
+interface ConnectConfig {
+  baseUrl: string;
+  headers: Record<string, string>;
+}
 
 export function parseConnect(connect?: string): ConnectConfig {
   const raw = connect
     || (typeof process !== "undefined" && process.env.TBR_CONNECT)
     || DEFAULT_BASE;
 
-  if (isAuthToken(raw)) {
-    return { baseUrl: DEFAULT_BASE, headers: { Authorization: `Bearer ${raw}` } };
+  // Bare value, no scheme.  Dispatch to auth or handshake by prefix.
+  if (!raw.includes("://")) {
+    const headers: Record<string, string> = {};
+    if (isAuthToken(raw)) {
+      headers.Authorization = `Bearer ${raw}`;
+    } else {
+      headers["x-tbr-handshake"] = raw;
+    }
+    return { baseUrl: DEFAULT_BASE, headers };
   }
 
   let urlPart = raw;
@@ -58,6 +93,139 @@ export function parseConnect(connect?: string): ConnectConfig {
 
   return { baseUrl: urlPart.replace(/\/+$/, ""), headers };
 }
+
+//  placeholder cache 
+
+const placeholderCache = new Map<string, Map<string, EncodedJpeg>>();
+
+function placeholderThumb(
+  serverKey: string,
+  placeholder: string,
+  b64: string,
+): EncodedJpeg {
+  let pool = placeholderCache.get(serverKey);
+  if (!pool) {
+    pool = new Map();
+    placeholderCache.set(serverKey, pool);
+  }
+  const existing = pool.get(placeholder);
+  if (existing) return existing;
+  const blob = new EncodedJpeg({ b64 });
+  pool.set(placeholder, blob);
+  return blob;
+}
+
+//  result construction 
+
+function mediaFromCaches(url: string, caches: readonly Cache[]): Media | undefined {
+  for (const cache of caches) {
+    const m = cache.get(url);
+    if (m) return m;
+  }
+  return undefined;
+}
+
+/** Decode one NDJSON line into a result object.
+ *
+ *  Supports two formats:
+ *  - Raw: `{"url":"...","status":"success",...}` the entire object is the result.
+ *  - Envelope: `{"type":"item.result","index":0,"result":{...}}` the `result` field is extracted.
+ *  Returns null if the line doesn't look like a valid result.
+ */
+function parseBatchLine(parsed: Record<string, unknown>): Record<string, unknown> | null {
+  // Envelope format (legacy tier1 server): extract the result.
+  if (typeof parsed.type === "string" && parsed.result && typeof parsed.result === "object") {
+    return parsed.result as Record<string, unknown>;
+  }
+  // Raw format: the whole object is the result.
+  if (typeof parsed.url === "string" && typeof parsed.status === "string") {
+    return parsed;
+  }
+  return null;
+}
+
+function resultFromServer(
+  item: Record<string, unknown>,
+  caches: readonly Cache[],
+  serverKey: string,
+): Result {
+  const source = item.source as string | undefined;
+  const mediaRaw = item.media as Record<string, unknown> | undefined;
+  const placeholder = (mediaRaw?.placeholder as string) || "";
+
+  if (source === Source.NOT_MODIFIED) {
+    const url = (item.url as string) ?? "";
+    const media = mediaFromCaches(url, caches);
+    if (media) {
+      const r = new Result(item);
+      r.media = media;
+      putAllCaches(caches, r.media);
+      return r;
+    }
+  }
+
+  if (placeholder) {
+    const thumbB64 = (mediaRaw?.thumbnail as string) ?? "";
+    const thumb = placeholderThumb(serverKey, placeholder, thumbB64);
+    const media = new Media(mediaRaw ?? {});
+    media.thumbnail = thumb;
+    const r = new Result(item);
+    r.media = media;
+    putAllCaches(caches, r.media);
+    return r;
+  }
+
+  const r = new Result(item);
+  putAllCaches(caches, r.media);
+  return r;
+}
+
+//  preflight 
+
+function preflightUrls(
+  urls: string[],
+  caches: readonly Cache[],
+): { done: Map<string, Result>; stale: { url: string; cache?: string }[] } {
+  const done = new Map<string, Result>();
+  const stale: { url: string; cache?: string }[] = [];
+
+  for (const url of urls) {
+    if (!url || !url.includes("://")) {
+      done.set(url, Result.clientFail(url, "invalid URL"));
+      continue;
+    }
+
+    let fresh = false;
+    for (const cache of caches) {
+      const media = cache.get(url);
+      if (media?.isFresh()) {
+        done.set(
+          url,
+          new Result({ url, status: Status.SUCCESS, source: Source.CACHE }),
+        );
+        // Attach the cached media.
+        done.get(url)!.media = media;
+        fresh = true;
+        break;
+      }
+    }
+    if (fresh) continue;
+
+    const item: { url: string; cache?: string } = { url };
+    for (const cache of caches) {
+      const media = cache.get(url);
+      if (media?.cache) {
+        item.cache = media.cache;
+        break;
+      }
+    }
+    stale.push(item);
+  }
+
+  return { done, stale };
+}
+
+//  client 
 
 /**
  * Thumbrella API client.
@@ -93,7 +261,100 @@ export class Client {
     this.headers = { "User-Agent": "thumbrella-ts/0.1", ...cfg.headers };
     this.caches = opts.caches === undefined
       ? [new MemoryCache()]
-      : opts.caches ?? [];
+      : opts?.caches ?? [];
+  }
+
+  //  public API 
+
+  /**
+   * Check configuration and server connectivity.
+   *
+   * Check that the server is operational and the configuration string is
+   * valid. If the connection string defines tokens or custom HTTP headers
+   * those will also be validated.
+   *
+   * On success this returns itself, to allow method chaining.
+   *
+   * Usage:
+   * ```ts
+   * const tbr = await new Client().verify();
+   * const result = await tbr.thumb(url);
+   * ```
+   *
+   * @throws {VerifyError} if the server is unreachable or misconfigured.
+   */
+  async verify(): Promise<this> {
+    const resp = await this.request("GET", "/health");
+    if (!resp.ok) {
+      const statusText = resp.statusText ? ` ${resp.statusText.toLowerCase()}` : "";
+      throw new VerifyError(
+        `Connect server not responding (${resp.status}${statusText})`,
+      );
+    }
+    let data: { status?: string; thumbrella?: number; token?: boolean };
+    try {
+      data = (await resp.json()) as { status?: string; thumbrella?: number; token?: boolean };
+    } catch {
+      throw new VerifyError("Connect is not a thumbrella server");
+    }
+    if (data?.thumbrella === undefined) {
+      throw new VerifyError("Connect is not a thumbrella server");
+    }
+    if (data?.status !== "ok") {
+      throw new VerifyError(`Connect unexpected response: ${JSON.stringify(data)}`);
+    }
+    if (data?.token === false) {
+      throw new VerifyError(
+        this.headers.Authorization
+          ? "Thumbrella connect invalid token"
+          : "Thumbrella connect requires a token",
+      );
+    }
+    return this;
+  }
+
+  /**
+   * Get a single URL result and fail if unsuccessful.
+   *
+   * This is a shortcut to regular {@link batch} for simple use cases. If
+   * there is any problem generating a thumbnail this will result in an
+   * exception, instead of a placeholder {@link Result}.
+   *
+   * Individual results can get the same effect by using {@link Result.verify}.
+   *
+   * This call waits for the result to complete before returning.
+   *
+   * See https://thumbrella.dev/docs/api/batch.html for server details.
+   *
+   * @throws {ThumbError} if the server returned an error for this URL.
+   */
+  async thumb(url: string): Promise<Result> {
+    const [result] = await this.batch([url]);
+    return result.verify();
+  }
+
+  /**
+   * Generate multiple thumbnail results.
+   *
+   * Generate a list of {@link Result} objects for the given URLs. The returned
+   * results are provided in the same order as the input URLs.
+   *
+   * This call waits for all results to complete before returning. For
+   * incremental results, see the {@link stream} method.
+   *
+   * This call won't throw exceptions. On errors, results will be marked
+   * with a failure status, but will still contain placeholder thumbnails.
+   *
+   * See https://thumbrella.dev/docs/api/batch.html for server details.
+   */
+  async batch(urls: string[]): Promise<Result[]> {
+    const collected = new Map<string, Result>();
+    for await (const r of this.stream(urls)) {
+      if (r.status !== Status.INTERMEDIATE) {
+        collected.set(r.url, r);
+      }
+    }
+    return urls.map((u) => collected.get(u) ?? Result.clientFail(u, "no result"));
   }
 
   /**
@@ -201,98 +462,7 @@ export class Client {
     }
   }
 
-  /**
-   * Generate multiple thumbnail results.
-   *
-   * Generate a list of {@link Result} objects for the given URLs. The returned
-   * results are provided in the same order as the input URLs.
-   *
-   * This call waits for all results to complete before returning. For
-   * incremental results, see the {@link stream} method.
-   *
-   * This call won't throw exceptions. On errors, results will be marked
-   * with a failure status, but will still contain placeholder thumbnails.
-   *
-   * See https://thumbrella.dev/docs/api/batch.html for server details.
-   */
-  async batch(urls: string[]): Promise<Result[]> {
-    const collected = new Map<string, Result>();
-    for await (const r of this.stream(urls)) {
-      if (r.status !== Status.INTERMEDIATE) {
-        collected.set(r.url, r);
-      }
-    }
-    return urls.map((u) => collected.get(u) ?? Result.clientFail(u, "no result"));
-  }
-
-  /**
-   * Get a single URL result and fail if unsuccessful.
-   *
-   * This is a shortcut to regular {@link batch} for simple use cases. If
-   * there is any problem generating a thumbnail this will result in an
-   * exception, instead of a placeholder {@link Result}.
-   *
-   * Individual results can get the same effect by using {@link Result.verify}.
-   *
-   * This call waits for the result to complete before returning.
-   *
-   * See https://thumbrella.dev/docs/api/batch.html for server details.
-   *
-   * @throws {ThumbError} if the server returned an error for this URL.
-   */
-  async thumb(url: string): Promise<Result> {
-    const [result] = await this.batch([url]);
-    return result.verify();
-  }
-
-  /**
-   * Check configuration and server connectivity.
-   *
-   * Check that the server is operational and the configuration string is
-   * valid. If the connection string defines tokens or custom HTTP headers
-   * those will also be validated.
-   *
-   * On success this returns itself, to allow method chaining.
-   *
-   * Usage:
-   * ```ts
-   * const tbr = await new Client().verify();
-   * const result = await tbr.thumb(url);
-   * ```
-   *
-   * @throws {VerifyError} if the server is unreachable or misconfigured.
-   */
-  async verify(): Promise<this> {
-    const resp = await this.request("GET", "/health");
-    if (!resp.ok) {
-      const statusText = resp.statusText ? ` ${resp.statusText.toLowerCase()}` : "";
-      throw new VerifyError(
-        `Connect server not responding (${resp.status}${statusText})`,
-      );
-    }
-    let data: { status?: string; thumbrella?: number; token?: boolean };
-    try {
-      data = (await resp.json()) as { status?: string; thumbrella?: number; token?: boolean };
-    } catch {
-      throw new VerifyError("Connect is not a thumbrella server");
-    }
-    if (data?.thumbrella === undefined) {
-      throw new VerifyError("Connect is not a thumbrella server");
-    }
-    if (data?.status !== "ok") {
-      throw new VerifyError(`Connect unexpected response: ${JSON.stringify(data)}`);
-    }
-    if (data?.token === false) {
-      throw new VerifyError(
-        this.headers.Authorization
-          ? "Thumbrella connect invalid token"
-          : "Thumbrella connect requires a token",
-      );
-    }
-    return this;
-  }
-
-  // HTTP
+  //  HTTP 
 
   async request(
     method: string,

@@ -1,7 +1,7 @@
-"""Status and type constants — string-based for cross-language portability."""
+"""Status and type constants, string-based for cross-language portability."""
 
 
-DEFAULT_BASE = "http://api.thumbrella.dev/"
+DEFAULT_BASE = "https://cloud.thumbrella.dev/"
 
 MAX_BACKOFF = 60.0
 
@@ -18,7 +18,7 @@ class Status:
     All status will still be provided with a thumbnail image. Some may be a 
     placeholder or failure image.
 
-    See the status documentation at http://thumbrella.dev/docs/status
+    See the status documentation at https://thumbrella.dev/docs/status
     """
 
     SUCCESS = "success"
@@ -38,7 +38,7 @@ class FileKind:
     Combined with the result ``extension`` attribute this gives a good 
     indication of the file contents.
 
-    See details about the extensions for each kind at http://thumbrella.dev/docs/kind
+    See details about the extensions for each kind at https://thumbrella.dev/docs/kind
     
     """
 

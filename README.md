@@ -1,82 +1,36 @@
 # Thumbrella Clients
 
-Official client libraries for the [Thumbrella](https://thumbrella.dev) thumbnail
-API.  Apache-2.0 licensed.  Lightweight, typed, and easy to integrate.
+<img src="thumbrella.png" alt="Thumbrella Logo" width="224" height="224" align="right" />
 
-Thumbrella generates thumbnails for images, video, documents, vector graphics,
-3D models, and more.  These clients wrap the HTTP API with language-idiomatic
-interfaces: typed results, streaming batches, and pluggable caching.
+Client libraries and framework components for the
+[Thumbrella](https://thumbrella.dev) thumbnail API.
+
+Thumbrella is an open-source server that generates fast, cached thumbnails from
+over 100 file formats of images, video, documents, 3D models, and more. It can be
+self-hosted or used via Thumbrella Cloud.
 
 ## Packages
 
-| Language   | Package                         | Status     |
-|------------|---------------------------------|------------|
-| TypeScript | [@thumbrella/client](./typescript) | Prerelease |
-| Python     | [thumbrella-client](./python)   | Prerelease |
-| Rust       | [thumbrella](./rust)            | Prerelease |
+Each subdirectory is independently versioned and published to its language
+registry. 
 
-Each subdirectory is independently versioned, tested, and published.
+| Directory              | Repository  | Package     | Status      |
+|------------------------|-------------|-------------|-------------|
+| [typescript/](./typescript) | `npm`  | [@thumbrella/client](https://www.npmjs.com/package/@thumbrella/client) | Prerelease  |
+| [python/](./python)    | `PyPI`      | [thumbrella-client](https://pypi.org/project/thumbrella-client/) | Prerelease  |
+| [rust/](./rust)        | `Crates.io` | [thumbrella-client](https://crates.io/crates/thumbrella-client) | Prerelease  |
+| [react/](./react)      | `npm`       | [@thumbrella/react](https://www.npmjs.com/package/@thumbrella/react) | ~~Unreleased~~  |
+| [astro/](./astro)      | `npm`       | [@thumbrella/astro](https://www.npmjs.com/package/@thumbrella/astro) | ~~Unreleased~~  |
 
-## Quick Start
+See each subdirectory's README for install instructions, quickstart examples,
+and API details.
 
-**TypeScript / Node.js**
-```bash
-npm install @thumbrella/client
-```
-```ts
-import { Client } from "@thumbrella/client";
-const tbr = await new Client().verify();
-const result = await tbr.thumb("https://example.com/photo.jpg");
-console.log(result.media?.thumbnail.length, "bytes");
-```
+The [project client documentation](https://thumbrella.dev/docs/client/) contains further information on working
+with Thumbrella servers.
 
-**Python**
-```bash
-pip install thumbrella-client
-```
-```python
-import thumbrella
-tbr = thumbrella.Client().verify()
-result = tbr.thumb("https://example.com/photo.jpg")
-print(len(result.media.thumbnail), "bytes")
-```
-
-## Library API Overview
-
-Create a `Client` with a connect string (defaults to `$TBR_CONNECT`).  Call
-`verify()` to confirm connectivity.  Then use `thumb()`, `batch()`, or
-`stream()` to generate thumbnails.
-
-Every URL produces a `Result` — even failures include a placeholder image.
-Call `result.verify()` to raise on failure, or check `result.isSuccess()`.
-
-### Connect Strings
-
-```
-# Local dev server (no auth)
-http://localhost:3114
-
-# Cloud service with auth token
-tbr_e_oQftPlhB6ulGkdu5lILXKZBM
-
-# Custom server with handshake
-https://my-server.example.com,my-handshake
-
-# Custom HTTP headers
-https://api.example.com,Authorization=Bearer tok,x-custom=val
-```
-
-## Examples
-
-Each package has runnable examples:
-
-```bash
-# TypeScript
-cd typescript && npx tsx examples/basic.ts https://demo.thumbrella.dev/media/math-guide.odt doc.jpeg
-
-# Python
-cd python && python examples/basic.py https://demo.thumbrella.dev/media/raw-canon.cr2 cam.jpeg
-```
+All clients use a connection string to define a server and authentication.
+By default they all read the `$TBR_CONNECT` environment variable. They also
+accept a connection string argument.
 
 ## License
 

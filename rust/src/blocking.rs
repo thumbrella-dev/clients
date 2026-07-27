@@ -1,9 +1,9 @@
-//! Blocking (synchronous) client — gated behind the `blocking` feature.
+//! Blocking (synchronous) client, gated behind the `blocking` feature.
 
 use crate::client::Client as AsyncClient;
 use crate::types::{Error, ResultData};
 
-/// Synchronous Thumbrella client — wraps the async client with a tokio
+/// Synchronous Thumbrella client, wraps the async client with a tokio
 /// runtime so callers never see `.await`.
 pub struct Client {
     inner: AsyncClient,
@@ -30,8 +30,8 @@ impl Client {
         self.rt.block_on(self.inner.batch(urls))
     }
 
-    pub fn stream(&self, urls: &[&str]) -> Result<Vec<ResultData>, Error> {
-        self.rt.block_on(self.inner.stream(urls))
+    pub fn stream(&self, _urls: &[&str]) -> Result<Vec<ResultData>, Error> {
+        todo!("NDJSON streaming not yet implemented; use `batch()` instead")
     }
 
     pub fn base_url(&self) -> &str {

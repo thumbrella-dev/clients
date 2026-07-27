@@ -8,11 +8,11 @@ use std::time::Duration;
 use crate::cache::{Cache, MemoryCache};
 use crate::types::*;
 
-const DEFAULT_BASE: &str = "http://cloud.thumbrella.dev/";
+const DEFAULT_BASE: &str = "https://cloud.thumbrella.dev/";
 const HTTP_TIMEOUT_SECS: u64 = 12;
 const MAX_BACKOFF_SECS: u64 = 60;
 
-// ── global backoff ───────────────────────────────────────────────────────
+//  global backoff
 
 struct Backoff {
     hosts: Mutex<HashMap<String, (std::time::Instant, u32)>>,
@@ -25,11 +25,10 @@ impl Backoff {
 
     fn check(&self, host: &str) -> Result<(), Error> {
         let map = self.hosts.lock().unwrap();
-        if let Some(&(until, _)) = map.get(host) {
-            if std::time::Instant::now() < until {
+        if let Some(&(until, _)) = map.get(host)
+            && std::time::Instant::now() < until {
                 return Err(Error::Connection(format!("{host} is throttled, retry later")));
             }
-        }
         Ok(())
     }
 
@@ -45,7 +44,7 @@ impl Backoff {
     }
 }
 
-// ── connect string parsing ───────────────────────────────────────────────
+//  connect string parsing
 
 struct ConnectConfig {
     base_url: String,
@@ -63,7 +62,7 @@ fn parse_connect(connect: Option<&str>) -> ConnectConfig {
         .or_else(|| std::env::var("TBR_CONNECT").ok())
         .unwrap_or_else(|| DEFAULT_BASE.to_string());
 
-    // Bare value — no scheme.  Dispatch to auth or handshake by prefix.
+    // Bare value, no scheme. Dispatch to auth or handshake by prefix.
     if !raw.contains("://") {
         let mut headers = HashMap::new();
         if is_auth_token(&raw) {
@@ -73,7 +72,7 @@ fn parse_connect(connect: Option<&str>) -> ConnectConfig {
         }
         return ConnectConfig {
             base_url: DEFAULT_BASE.into(),
-            host: "api.thumbrella.dev".into(),
+            host: "cloud.thumbrella.dev".into(),
             headers,
         };
     }
@@ -105,9 +104,9 @@ fn parse_connect(connect: Option<&str>) -> ConnectConfig {
     ConnectConfig { base_url, host, headers }
 }
 
-// ── Client ────────────────────────────────────────────────────────────────
+//  Client 
 
-/// Thumbrella API client — async-first.
+/// Thumbrella API client, async-first.
 ///
 /// A centralized configuration for a Thumbrella server and client-side caches.
 /// The connection is described by a "connect string". By default this uses the
@@ -130,8 +129,8 @@ fn parse_connect(connect: Option<&str>) -> ConnectConfig {
 /// See <https://thumbrella.dev/docs/client> for full documentation.
 ///
 /// ```no_run
-/// # async fn example() -> Result<(), thumbrella::Error> {
-/// let tbr = thumbrella::Client::new(None);
+/// # async fn example() -> Result<(), thumbrella_client::Error> {
+/// let tbr = thumbrella_client::Client::new(None);
 /// tbr.verify().await?;
 /// let result = tbr.thumb("https://example.com/photo.jpg").await?;
 /// if let Some(media) = &result.media {
@@ -204,7 +203,7 @@ impl Client {
         &self.base_url
     }
 
-    // ── public API ───────────────────────────────────────────────────────
+    //  public API
 
     /// Check configuration and server connectivity.
     ///
@@ -283,8 +282,8 @@ impl Client {
             // Check caches for a fresh entry.
             let mut fresh = false;
             for cache in &self.caches {
-                if let Some(cached) = cache.get(url) {
-                    if cached.is_fresh() {
+                if let Some(cached) = cache.get(url)
+                    && cached.is_fresh() {
                         let mut r = ResultData::new(url.to_string());
                         r.status = status::SUCCESS.to_string();
                         r.source = Some(source::CACHE.to_string());
@@ -293,7 +292,6 @@ impl Client {
                         fresh = true;
                         break;
                     }
-                }
             }
             if fresh {
                 continue;
@@ -301,11 +299,9 @@ impl Client {
 
             let mut item = serde_json::json!({ "url": url });
             for cache in &self.caches {
-                if let Some(cached) = cache.get(url) {
-                    if !cached.cache.is_empty() {
-                        item["cache"] = serde_json::Value::String(cached.cache.clone());
-                        break;
-                    }
+                if let Some(cached) = cache.get(url) && !cached.cache.is_empty() {
+                    item["cache"] = serde_json::Value::String(cached.cache.clone());
+                    break;
                 }
             }
             stale_items.push(item);
@@ -367,16 +363,15 @@ impl Client {
 
     /// Stream thumbnail results as they complete.
     ///
-    /// Currently delegates to [`batch`](Self::batch) — true NDJSON streaming
-    /// is not yet implemented. Results are still collected and returned in
-    /// order.
+    /// Use [`batch`](Self::batch) for now, which provides the same results
+    /// synchronously once all thumbnails complete.
     ///
     /// See <https://thumbrella.dev/docs/api/batch.html> for server details.
-    pub async fn stream(&self, urls: &[&str]) -> Result<Vec<ResultData>, Error> {
-        self.batch(urls).await
+    pub async fn stream(&self, _urls: &[&str]) -> Result<Vec<ResultData>, Error> {
+        todo!("NDJSON streaming not yet implemented; use `batch()` instead")
     }
 
-    // ── helpers ──────────────────────────────────────────────────────────
+    //  helpers 
 
     fn collect_results<F>(
         &self,
