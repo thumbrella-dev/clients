@@ -14,13 +14,7 @@ The [client git repository](https://github.com/thumbrella-dev/clients) also has
 packages for other languages and environments. See
 [Python](https://pypi.org/project/thumbrella-client/),
 [Rust](https://crates.io/crates/thumbrella-client),
-[React](https://www.npmjs.com/package/@thumbrella/react),
-[Astro](https://www.npmjs.com/package/@thumbrella/astro), and more coming soon.
 
-If you're building a React or Astro site, check out
-**[@thumbrella/react](https://www.npmjs.com/package/@thumbrella/react)**
-and **[@thumbrella/astro](https://www.npmjs.com/package/@thumbrella/astro)**,
-component wrappers that drop straight into your templates.
 
 ## Features
 
