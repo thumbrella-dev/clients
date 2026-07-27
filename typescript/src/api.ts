@@ -17,41 +17,6 @@ const DEFAULT_BASE = "https://cloud.thumbrella.dev/";
 const MAX_BACKOFF_MS = 60_000;
 const HTTP_TIMEOUT_MS = 12_000;
 
-//  global backoff
-
-const _backoff = new Map<string, { until: number; failures: number }>();
-
-function checkBackoff(host: string): void {
-  const state = _backoff.get(host);
-  if (state && Date.now() < state.until) {
-    throw new ConnectionError(`${host} is throttled, retry later`);
-  }
-}
-
-function recordBackoff(host: string, throttled: boolean): void {
-  if (throttled) {
-    const state = _backoff.get(host);
-    const failures = (state?.failures ?? 0) + 1;
-    const delay = Math.min(2 ** failures * 1000, MAX_BACKOFF_MS);
-    _backoff.set(host, { until: Date.now() + delay, failures });
-  } else {
-    _backoff.delete(host);
-  }
-}
-
-//  helpers
-
-/** True when a value looks like a Thumbrella auth token (`tbr_[a-z]_` prefix). */
-function isAuthToken(s: string): boolean {
-  return /^tbr_[a-z]_/.test(s);
-}
-
-//  connect string parsing
-
-interface ConnectConfig {
-  baseUrl: string;
-  headers: Record<string, string>;
-}
 
 export function parseConnect(connect?: string): ConnectConfig {
   const raw = connect
@@ -94,136 +59,6 @@ export function parseConnect(connect?: string): ConnectConfig {
   return { baseUrl: urlPart.replace(/\/+$/, ""), headers };
 }
 
-//  placeholder cache 
-
-const placeholderCache = new Map<string, Map<string, EncodedJpeg>>();
-
-function placeholderThumb(
-  serverKey: string,
-  placeholder: string,
-  b64: string,
-): EncodedJpeg {
-  let pool = placeholderCache.get(serverKey);
-  if (!pool) {
-    pool = new Map();
-    placeholderCache.set(serverKey, pool);
-  }
-  const existing = pool.get(placeholder);
-  if (existing) return existing;
-  const blob = new EncodedJpeg({ b64 });
-  pool.set(placeholder, blob);
-  return blob;
-}
-
-//  result construction 
-
-function mediaFromCaches(url: string, caches: readonly Cache[]): Media | undefined {
-  for (const cache of caches) {
-    const m = cache.get(url);
-    if (m) return m;
-  }
-  return undefined;
-}
-
-/** Decode one NDJSON line into a result object.
- *
- *  Supports two formats:
- *  - Raw: `{"url":"...","status":"success",...}` the entire object is the result.
- *  - Envelope: `{"type":"item.result","index":0,"result":{...}}` the `result` field is extracted.
- *  Returns null if the line doesn't look like a valid result.
- */
-function parseBatchLine(parsed: Record<string, unknown>): Record<string, unknown> | null {
-  // Envelope format (legacy tier1 server): extract the result.
-  if (typeof parsed.type === "string" && parsed.result && typeof parsed.result === "object") {
-    return parsed.result as Record<string, unknown>;
-  }
-  // Raw format: the whole object is the result.
-  if (typeof parsed.url === "string" && typeof parsed.status === "string") {
-    return parsed;
-  }
-  return null;
-}
-
-function resultFromServer(
-  item: Record<string, unknown>,
-  caches: readonly Cache[],
-  serverKey: string,
-): Result {
-  const source = item.source as string | undefined;
-  const mediaRaw = item.media as Record<string, unknown> | undefined;
-  const placeholder = (mediaRaw?.placeholder as string) || "";
-
-  if (source === Source.NOT_MODIFIED) {
-    const url = (item.url as string) ?? "";
-    const media = mediaFromCaches(url, caches);
-    if (media) {
-      const r = new Result(item);
-      r.media = media;
-      putAllCaches(caches, r.media);
-      return r;
-    }
-  }
-
-  if (placeholder) {
-    const thumbB64 = (mediaRaw?.thumbnail as string) ?? "";
-    const thumb = placeholderThumb(serverKey, placeholder, thumbB64);
-    const media = new Media(mediaRaw ?? {});
-    media.thumbnail = thumb;
-    const r = new Result(item);
-    r.media = media;
-    putAllCaches(caches, r.media);
-    return r;
-  }
-
-  const r = new Result(item);
-  putAllCaches(caches, r.media);
-  return r;
-}
-
-//  preflight 
-
-function preflightUrls(
-  urls: string[],
-  caches: readonly Cache[],
-): { done: Map<string, Result>; stale: { url: string; cache?: string }[] } {
-  const done = new Map<string, Result>();
-  const stale: { url: string; cache?: string }[] = [];
-
-  for (const url of urls) {
-    if (!url || !url.includes("://")) {
-      done.set(url, Result.clientFail(url, "invalid URL"));
-      continue;
-    }
-
-    let fresh = false;
-    for (const cache of caches) {
-      const media = cache.get(url);
-      if (media?.isFresh()) {
-        done.set(
-          url,
-          new Result({ url, status: Status.SUCCESS, source: Source.CACHE }),
-        );
-        // Attach the cached media.
-        done.get(url)!.media = media;
-        fresh = true;
-        break;
-      }
-    }
-    if (fresh) continue;
-
-    const item: { url: string; cache?: string } = { url };
-    for (const cache of caches) {
-      const media = cache.get(url);
-      if (media?.cache) {
-        item.cache = media.cache;
-        break;
-      }
-    }
-    stale.push(item);
-  }
-
-  return { done, stale };
-}
 
 //  client 
 
@@ -372,7 +207,7 @@ export class Client {
    * See https://thumbrella.dev/docs/api/batch.html for server details.
    */
   async *stream(urls: string[]): AsyncGenerator<Result> {
-    const { done, stale } = await preflightUrls(urls, this.caches);
+    const { done, stale } = preflightUrls(urls, this.caches);
 
     for (const url of urls) {
       const r = done.get(url);
@@ -549,12 +384,6 @@ function resolveHost(baseUrl: string): string {
   }
 }
 
-function checkBackoff(host: string): void {
-  const state = _backoff.get(host);
-  if (state && Date.now() < state.until) {
-    throw new ConnectionError(`${host} is throttled, retry later`);
-  }
-}
 
 function recordBackoff(host: string, throttled: boolean): void {
   if (throttled) {
@@ -573,10 +402,10 @@ function isAbsolutePath(s: string): boolean {
   return /^[a-zA-Z]:[/\\]/.test(s);
 }
 
-async function preflightUrls(
+function preflightUrls(
   urls: string[],
   caches: readonly Cache[],
-): Promise<{ done: Map<string, Result>; stale: { url: string; cache?: string }[] }> {
+): { done: Map<string, Result>; stale: { url: string; cache?: string }[] } {
   const done = new Map<string, Result>();
   const stale: { url: string; cache?: string }[] = [];
 
@@ -586,7 +415,6 @@ async function preflightUrls(
       continue;
     }
 
-    // Check caches for a fresh entry.
     let fresh = false;
     for (const cache of caches) {
       const media = cache.get(url);
@@ -616,6 +444,8 @@ async function preflightUrls(
 
   return { done, stale };
 }
+
+const placeholderCache = new Map<string, Map<string, EncodedJpeg>>();
 
 function placeholderThumb(
   serverKey: string,
@@ -686,3 +516,14 @@ function resultFromServer(
   putAllCaches(caches, r.media);
   return r;
 }
+
+
+const _backoff = new Map<string, { until: number; failures: number }>();
+
+function checkBackoff(host: string): void {
+  const state = _backoff.get(host);
+  if (state && Date.now() < state.until) {
+    throw new ConnectionError(`${host} is throttled, retry later`);
+  }
+}
+
