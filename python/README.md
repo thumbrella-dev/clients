@@ -7,12 +7,7 @@ handles images, video, documents, vector graphics, 3D models, and more.
 [![Python](https://img.shields.io/pypi/pyversions/thumbrella-client)](https://pypi.org/project/thumbrella-client/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
-Thumbrella servers can be self-hosted or used as a cloud service. This package
-wraps the HTTP API with typed results, async streaming, pluggable caching, and
-a connect-string system that works the same way across local dev, CI, and
-production.
-
-Requires Python 3.10+. Sync-only usage depends on `requests`. Async streaming
+Requires Python 3.10+.  Sync usage depends on `requests`.  Async streaming
 needs the optional `async` extra (`aiohttp`).
 
 ## Install
@@ -49,7 +44,7 @@ results = tbr.batch([
 for r in results:
     print(r.url, r.status, r.media.kind)
 
-# Stream results as the server finishes each thumbnail (requires aiohttp).
+# Stream results as each thumbnail completes (requires aiohttp).
 import asyncio
 
 async def stream_example():
@@ -65,67 +60,72 @@ asyncio.run(stream_example())
 
 ## How It Works
 
-Create a `Client` with server configuration and optional caches. Call `verify()`
-to confirm connectivity. Then use `thumb()`, `batch()`, or `stream()` to
-generate thumbnails.
+Create a `Client` with a connect string.  Call `verify()` to confirm
+connectivity.  Then use `thumb()`, `batch()`, or `stream()` to generate
+thumbnails.
 
-Every URL gets a `Result` — even failures produce a result with a placeholder
-image and an error message. Use `result.verify()` to raise an exception on
-failure, or check `result.is_success()` for inline handling.
+Every URL produces a `Result` — even failures include a placeholder JPEG.
+Call `result.verify()` to raise on failure, or check `result.is_success()`.
 
 ### Connect Strings
 
-The client reads `$TBR_CONNECT` by default. Pass a connect string to override:
-
 ```python
-# Local dev server (no auth)
+# No args — reads $TBR_CONNECT
+thumbrella.Client()
+
+# Local dev server
 thumbrella.Client("http://localhost:3114")
 
 # Cloud service with auth token
-thumbrella.Client("https://api.thumbrella.dev,tbr_e_oQftPlhB6ulGkdu5lILXKZBM")
+thumbrella.Client("tbr_e_oQftPlhB6ulGkdu5lILXKZBM")
 
-# Custom server with handshake value
+# Custom server with handshake
 thumbrella.Client("https://my-server.example.com,my-handshake")
 
 # Custom HTTP headers
 thumbrella.Client("https://api.example.com,Authorization=Bearer tok,x-custom=val")
 ```
 
-The `session` attribute on a Client is a `requests.Session` — customize it for
-proxies, TLS certificates, cookies, or other HTTP-level configuration.
+The `session` attribute is a `requests.Session` — customize it for proxies,
+TLS, cookies, or other HTTP configuration.
 
 ### Result
 
 ```python
-result.url         # str — the requested URL
-result.status      # "SUCCESS" | "FAILED" | "OVERLOADED" | "INTERMEDIATE" | ...
-result.source      # "RENDER" | "CACHE" | "FALLBACK" | "PLACEHOLDER" | ...
-result.media       # Media | None — None when thumbnail could not be generated
-result.duration    # float — server processing time (ms)
-result.message     # str — error or informational message
+result.url          # str — the requested URL
+result.status        # "success" | "failed" | "overloaded" | "intermediate" | "unavailable"
+result.source        # "render" | "shortcut" | "cache" | "fallback" | "client" | None
+result.media         # Media | None
+result.duration      # float — server processing time (s)
+result.message       # str | None — error or informational message
 
-result.is_success()  # True for SUCCESS or INTERMEDIATE
-result.is_fresh()    # True when the server freshly rendered (not from cache)
+result.is_success()  # True for "success" or "intermediate"
 result.verify()      # returns self on success, raises ThumbError on failure
 ```
 
 ### Media
 
 ```python
-media.url          # str — the original media URL
-media.mime         # "image/jpeg" | ...
-media.kind         # "image" | "video" | "document" | "vector" | "geometry" | ...
-media.file_size    # int — original file size in bytes
-media.thumbnail    # EncodedJpeg — the thumbnail JPEG bytes
+media.url            # str — the original media URL
+media.mime           # "image/jpeg" | ...
+media.kind           # "image" | "video" | "audio" | "document" | "geometry" | ...
+media.file_size      # int — original file size in bytes
+media.extension      # str — canonical extension, no dot
+media.cache          # str — cache token for conditional revalidation
+media.placeholder    # str — non-empty when this is a shared placeholder image
+media.properties     # dict[str, int|float] — format-specific metadata
+media.thumbnail      # EncodedJpeg — always valid (falls back to "unavailable" JPEG)
+
+media.is_fresh()     # True when the cache token hasn't expired
 ```
 
 ### EncodedJpeg
 
 ```python
-jpeg.bytes         # bytes — decoded JPEG bytes (lazy, cached)
-jpeg.io            # _BytesIO — file-like object, compatible with PIL and numpy
-len(jpeg)          # int — byte count
-jpeg.key           # str — content hash, useful for deduplication
+jpeg.bytes           # bytes — decoded JPEG bytes (lazy, cached)
+jpeg.io              # _BytesIO — file-like object, compatible with PIL and numpy
+len(jpeg)            # int — byte count
+jpeg.key             # int — content hash, usable as a dict key
 ```
 
 PIL integration:
@@ -142,37 +142,33 @@ print(img.mode, img.size)
 from thumbrella import ThumbError, ConnectionError, TimeoutError, VerifyError
 ```
 
-All errors extend `ThumbError`. `verify()` on a Client raises `VerifyError` for
-bad config or unreachable servers. Network issues raise `ConnectionError` or
-`TimeoutError`. Per-result failures don't raise — call `result.verify()` to
-convert them to exceptions.
+All errors extend `ThumbError`.  `verify()` on a Client raises `VerifyError`.
+Network issues raise `ConnectionError` or `TimeoutError`.  Per-result
+failures don't raise — call `result.verify()` instead.
 
 ## Caching
 
-Each `Client` defaults to an in-memory LRU cache (256 entries). Pass custom
-caches to persist thumbnails across restarts or share them between clients:
+Each `Client` defaults to an in-memory LRU cache (256 entries).  The cache
+stores `Media` objects with TTL freshness.  Pass custom caches:
 
 ```python
 import thumbrella
-
-# Default memory cache
-thumbrella.Client()
 
 # No caching
 thumbrella.Client(caches=[])
 
 # Custom cache backend
 class MyCache(thumbrella.Cache):
-    def get(self, url: str) -> thumbrella.Media | None:
-        ...  # check persistent store
-    def set(self, media: thumbrella.Media) -> None:
-        ...  # write to persistent store
-    def reset(self) -> None:
-        ...  # clear
+    def get(self, url: str) -> thumbrella.Media | None: ...
+    def put(self, media: thumbrella.Media) -> None: ...
+    def reset(self) -> None: ...
 
 # Multiple layers — checked in order, first hit wins
 thumbrella.Client(caches=[MyCache(), thumbrella.MemoryCache()])
 ```
+
+`stream()` and `batch()` automatically check caches before calling the
+server and send cache tokens for conditional revalidation.
 
 ## Examples
 
@@ -190,16 +186,6 @@ python examples/collage.py urls.txt
 python examples/gallery.py https://example.com/a.jpg https://example.com/b.png
 ```
 
-See [`examples/`](./examples) for full source.
-
-## Where To Go Next
-
-- [Full client documentation](https://thumbrella.dev/docs/client)
-- [Thumbrella main site](https://thumbrella.dev)
-- [Python API reference (Read the Docs)](https://thumbrella.readthedocs.io)
-- [GitHub repository](https://github.com/thumbrella-dev/thumbrella-clients)
-
 ## License
 
-Apache-2.0. See [LICENSE](./LICENSE).
-
+Apache-2.0. See [LICENSE](LICENSE).

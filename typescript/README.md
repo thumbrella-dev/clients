@@ -6,13 +6,9 @@ handles images, video, documents, vector graphics, 3D models, and more.
 [![npm version](https://img.shields.io/npm/v/@thumbrella/client)](https://www.npmjs.com/package/@thumbrella/client)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
-Thumbrella servers can be self-hosted or used as a cloud service. This package
-wraps the HTTP API with typed results, streaming batches, pluggable
-caching, and a connect-string system that works the same way across local dev,
-CI, and production.
-
-Zero runtime dependencies outside Node.js built-ins. Runs on Node 18+ and
-modern JS runtimes with native `fetch`.
+Zero runtime dependencies.  Runs on Node 18+ and modern JS runtimes with
+native `fetch`.  Includes a `<tbr-thumb>` custom element for zero-config
+browser thumbnails.
 
 ## Install
 
@@ -20,16 +16,14 @@ modern JS runtimes with native `fetch`.
 npm install @thumbrella/client
 ```
 
-## Quick Start
+## Quick Start — Node
 
 ```ts
 import { Client } from "@thumbrella/client";
 
-// Client() reads $TBR_CONNECT from the environment.
-// verify() checks the server is reachable and auth is valid.
+// No args → reads $TBR_CONNECT from the environment.
 const tbr = await new Client().verify();
 
-// Single URL — returns a Result with the thumbnail JPEG.
 const result = await tbr.thumb("https://example.com/photo.jpg");
 if (result.isSuccess()) {
   console.log(result.media!.thumbnail.length, "bytes");
@@ -41,55 +35,86 @@ const results = await tbr.batch([
   "https://example.com/b.png",
 ]);
 
-// Stream results as the server finishes each thumbnail.
-for await (const r of tbr.stream([
-  "https://example.com/a.jpg",
-  "https://example.com/b.png",
-])) {
+// Stream results as each thumbnail completes.
+for await (const r of tbr.stream(["https://example.com/a.jpg", "https://example.com/b.png"])) {
   console.log(r.url, r.status);
 }
 ```
 
+## Quick Start — Browser
+
+```html
+<script type="module">
+  import { tbrSetup } from "@thumbrella/client/element";
+  tbrSetup("https://demo.thumbrella.dev");
+</script>
+
+<tbr-thumb src="https://demo.thumbrella.dev/media/space-colony.jpg"
+           style="width:200px"></tbr-thumb>
+<tbr-thumb src="https://demo.thumbrella.dev/media/stanford-bunny.stl"
+           style="width:200px"></tbr-thumb>
+```
+
+One `tbrSetup` call and `<tbr-thumb>` elements handle everything: shimmer
+skeleton, spinner, streaming placeholders, failure images, and byte-level
+caching.  Zero configuration beyond the connect string.
+
+## Module Structure
+
+| Import                               | Contents                                     |
+|--------------------------------------|----------------------------------------------|
+| `@thumbrella/client`                 | `Client`, `Result`, `Media`, `EncodedJpeg`, types |
+| `@thumbrella/client/element`         | `<tbr-thumb>` custom element, `tbrSetup()`    |
+| `@thumbrella/client/browser`         | `getClient()`, `createThumbImg()`, `createBrowserCache()`, helpers |
+
+Node users only import from the root.  Browser users import from `./element`
+or `./browser`.
+
 ## How It Works
 
-Create a `Client` with server configuration and optional caches. Call `verify()`
-to confirm connectivity. Then use `thumb()`, `batch()`, or `stream()` to
-generate thumbnails.
+Create a `Client` with a connect string.  Call `verify()` to confirm
+connectivity.  Then use `thumb()`, `batch()`, or `stream()` to generate
+thumbnails.
 
-Every URL gets a `Result` — even failures produce a result with a placeholder
-image and an error message. Use `result.verify()` to throw on failure, or check
-`result.isSuccess()` for inline handling.
+Every URL produces a `Result` — even failures include a placeholder JPEG.
+Call `result.verify()` to throw on failure, or check `result.isSuccess()`.
 
 ### Connect Strings
 
-The client reads `$TBR_CONNECT` by default. Pass a connect string to override:
-
 ```ts
-// Local dev server (no auth)
-new Client({ connect: "http://localhost:3114" });
+// No args — reads $TBR_CONNECT
+new Client();
 
-// Cloud service with auth token
-new Client({ connect: "https://api.thumbrella.dev,tbr_e_oQftPlhB6ulGkdu5lILXKZBM" });
+// Just a URL
+new Client("http://localhost:3114");
 
-// Custom server with handshake value
-new Client({ connect: "https://my-server.example.com,my-handshake" });
+// Auth token
+new Client("tbr_e_oQftPlhB6ulGkdu5lILXKZBM");
 
-// Custom HTTP headers
-new Client({ connect: "https://api.example.com,Authorization=Bearer tok,x-custom=val" });
+// Full config
+new Client({
+  connect: "https://api.thumbrella.dev,tbr_e_xxx",
+  caches: [],
+});
 ```
+
+### Client constructor
+
+The constructor accepts a connect string, a config object, or nothing (reads
+`$TBR_CONNECT` / `window.TBR_CONNECT`).
 
 ### Result
 
 ```ts
 result.url          // string — the requested URL
-result.status       // "SUCCESS" | "FAILED" | "OVERLOADED" | "INTERMEDIATE" | ...
-result.source       // "RENDER" | "CACHE" | "FALLBACK" | "PLACEHOLDER" | ...
-result.media        // Media | null — null when thumbnail could not be generated
-result.duration     // number — server processing time (ms)
-result.message      // string — error or informational message
+result.status       // "success" | "failed" | "overloaded" | "intermediate" | "unavailable"
+result.source       // "render" | "shortcut" | "cache" | "fallback" | "client" | null
+result.media        // Media | null
+result.duration     // number — server processing time (s)
+result.message      // string | null — error or informational message
+result.httpStatus   // number | null — upstream HTTP status
 
-result.isSuccess()  // true for SUCCESS or INTERMEDIATE
-result.isFresh()    // true when the server freshly rendered (not from cache)
+result.isSuccess()  // true for "success"
 result.verify()     // returns this on success, throws ThumbError on failure
 ```
 
@@ -98,17 +123,23 @@ result.verify()     // returns this on success, throws ThumbError on failure
 ```ts
 media.url           // string — the original media URL
 media.mime          // "image/jpeg" | ...
-media.kind          // "image" | "video" | "document" | "vector" | "geometry" | ...
+media.kind          // "image" | "video" | "audio" | "document" | "geometry" | ...
 media.fileSize      // number — original file size in bytes
-media.thumbnail     // EncodedJpeg — the thumbnail JPEG bytes
+media.extension     // string — canonical extension, no dot
+media.cache         // string — cache token for conditional revalidation
+media.placeholder   // string — non-empty when this is a shared placeholder image
+media.properties    // Record<string, number> — format-specific metadata
+media.thumbnail     // EncodedJpeg — always valid (falls back to "unavailable" JPEG)
+
+media.isFresh()     // true when the cache token hasn't expired
 ```
 
 ### EncodedJpeg
 
 ```ts
 jpeg.bytes          // Uint8Array — decoded JPEG bytes (lazy, cached)
-jpeg.length          // number — byte count
-jpeg.key            // string — content hash, useful for deduplication
+jpeg.length         // number — byte count
+jpeg.key            // number — content hash, usable as a Map key
 ```
 
 ### Errors
@@ -117,74 +148,55 @@ jpeg.key            // string — content hash, useful for deduplication
 import { ThumbError, VerifyError, ConnectionError, TimeoutError } from "@thumbrella/client";
 ```
 
-All errors extend `ThumbError`. `verify()` on a Client throws `VerifyError` for
-bad config or unreachable servers. Network issues throw `ConnectionError` or
-`TimeoutError` (12s default). Per-result failures don't throw — call
-`result.verify()` to convert them to exceptions.
+All errors extend `ThumbError`.  `verify()` on a Client throws `VerifyError`.
+Network issues throw `ConnectionError` or `TimeoutError` (12 s default).
+Per-result failures don't throw — call `result.verify()` instead.
 
 ## Caching
 
-Each `Client` defaults to an in-memory LRU cache (256 entries). Pass custom
-caches to persist thumbnails across restarts or share them between clients:
+Each `Client` defaults to an in-memory LRU cache (256 entries).  The cache
+stores `Media` objects with TTL freshness.  Pass custom caches:
 
 ```ts
-import { Client, MemoryCache, putAllCaches } from "@thumbrella/client";
+import { Client, MemoryCache } from "@thumbrella/client";
 import type { Cache } from "@thumbrella/client";
 
 // No caching
 new Client({ caches: [] });
 
 // Custom cache backend
-class MyCache implements Cache {
-  get(url: string): Media | null { /* check persistent store */ }
-  set(media: Media): void { /* write to persistent store */ }
-  reset(): void { /* clear */ }
-}
-
-// Multiple layers — checked in order, first hit wins
-new Client({ caches: [new MyCache(), new MemoryCache({ maxEntries: 512 })] });
+new Client({ caches: [new MemoryCache({ maxItems: 512 })] });
 ```
+
+`stream()` and `batch()` automatically check caches before calling the
+server and send cache tokens for conditional revalidation.
+
+## `<tbr-thumb>` Element
+
+| Attribute | Description |
+|-----------|-------------|
+| `src`     | Media URL to thumbnail |
+| `connect` | Per-element connect string override |
+| `alt`     | Accessible label (shown during loading) |
+| `lazy`    | `"true"` to load only when scrolled into view |
+
+CSS custom properties: `--tbr-shimmer`, `--tbr-spinner-color`, `--tbr-bg`.
+
+Fires `tbr:loaded` (CustomEvent, bubbles, composed) with `detail: { result }`.
 
 ## Examples
 
 ```bash
-# Download one thumbnail to disk
+# Open element.html in a browser — shows <tbr-thumb> in action.
+open examples/element.html
+
+# Download one thumbnail to disk.
 npx tsx examples/basic.ts https://demo.thumbrella.dev/media/math-guide.odt doc.jpeg
 
-# Stream batch progress
+# Stream batch progress.
 npx tsx examples/stream.ts https://example.com/a.jpg https://example.com/b.png
-
-# Thumbnail a local file (upload mode — zero extra deps)
-TBR_CONNECT=tbr_s_YOUR_TOKEN npx tsx examples/file-share.ts ./document.pdf out.jpg
-
-# Thumbnail a local file via tunnel (no middleman, supports range requests)
-npm install localtunnel
-TBR_CONNECT=tbr_s_YOUR_TOKEN npx tsx examples/file-share.ts --tunnel ./video.mp4 thumb.jpg
 ```
-
-### Shipped CLI: `npx thumbrella-file`
-
-```bash
-npm install @thumbrella/client
-
-# Upload mode
-TBR_CONNECT=tbr_s_YOUR_TOKEN npx thumbrella-file ./photo.jpg thumb.jpg
-
-# Tunnel mode (one extra dep)
-npm install localtunnel
-TBR_CONNECT=tbr_s_YOUR_TOKEN npx thumbrella-file --tunnel ./video.mp4 thumb.jpg
-```
-
-Source at [`src/bin/file.ts`](./src/bin/file.ts).
-
-## Where To Go Next
-
-- [Full client documentation](https://thumbrella.dev/docs/client)
-- [Thumbrella main site](https://thumbrella.dev)
-- [TypeScript API reference](https://thumbrella.dev/docs/client/typescript)
-- [GitHub repository](https://github.com/thumbrella-dev/thumbrella-clients)
 
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
-

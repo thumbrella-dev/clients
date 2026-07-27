@@ -1,4 +1,4 @@
-import type { Cache, CacheBackend } from "./cache.js";
+import type { Cache } from "./cache.js";
 import { MemoryCache, putAllCaches } from "./cache.js";
 import {
   Result,
@@ -79,13 +79,10 @@ export class Client {
   readonly baseUrl: string;
   private headers: Record<string, string>;
   private caches: Cache[];
-  /** Byte-level cache backends for raw thumbnail data (optional). */
-  readonly cacheBackends: CacheBackend[];
 
   constructor(connectOrOpts?: string | {
     connect?: string;
     caches?: Cache[] | null;
-    cacheBackends?: CacheBackend[] | null;
   }) {
     const opts = typeof connectOrOpts === "string"
       ? { connect: connectOrOpts }
@@ -97,7 +94,6 @@ export class Client {
     this.caches = opts.caches === undefined
       ? [new MemoryCache()]
       : opts.caches ?? [];
-    this.cacheBackends = opts.cacheBackends ?? [];
   }
 
   /**
@@ -115,7 +111,7 @@ export class Client {
    * See https://thumbrella.dev/docs/api/batch.html for server details.
    */
   async *stream(urls: string[]): AsyncGenerator<Result> {
-    const { done, stale } = preflightUrls(urls, this.caches);
+    const { done, stale } = await preflightUrls(urls, this.caches);
 
     for (const url of urls) {
       const r = done.get(url);
@@ -407,10 +403,10 @@ function isAbsolutePath(s: string): boolean {
   return /^[a-zA-Z]:[/\\]/.test(s);
 }
 
-function preflightUrls(
+async function preflightUrls(
   urls: string[],
   caches: readonly Cache[],
-): { done: Map<string, Result>; stale: { url: string; cache?: string }[] } {
+): Promise<{ done: Map<string, Result>; stale: { url: string; cache?: string }[] }> {
   const done = new Map<string, Result>();
   const stale: { url: string; cache?: string }[] = [];
 
@@ -420,6 +416,7 @@ function preflightUrls(
       continue;
     }
 
+    // Check caches for a fresh entry.
     let fresh = false;
     for (const cache of caches) {
       const media = cache.get(url);
@@ -435,6 +432,7 @@ function preflightUrls(
     }
     if (fresh) continue;
 
+    // Stale — must go to server.
     const item: { url: string; cache?: string } = { url };
     for (const cache of caches) {
       const media = cache.get(url);

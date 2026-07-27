@@ -1,366 +1,255 @@
 /// <reference lib="dom" />
 
 /**
- * browser.ts — Browser-environment utilities for Thumbrella.
+ * browser.ts — One-tag Thumbrella setup for the browser.
  *
- * Re-exports core types alongside helpers for working with thumbnails
- * in the browser: class toggling, data-URI access, image creation,
- * IndexedDB caching, shared Client singleton, and global configuration.
+ * Drop this single script tag onto any page and you're ready to use
+ * `<tbr-thumb>` elements everywhere:
  *
- * For the one-tag custom-element setup see {@link ./element.ts}.
+ * ```html
+ * <script async src="https://cdn.jsdelivr.net/npm/@thumbrella/client@0.3/dist/browser.js"
+ *   data-tbr-connect="tbr_p_xxxx"
+ *   data-tbr-cache="mem">
+ * </script>
+ *
+ * <tbr-thumb src="https://example.com/photo.jpg" style="width:200px;height:150px"></tbr-thumb>
+ * ```
+ *
+ * ## Script attributes (set on the `<script>` tag itself)
+ *
+ * | Attribute            | Description                                              |
+ * |----------------------|----------------------------------------------------------|
+ * | `data-tbr-connect`   | Thumbrella connect string — publishable token or base URL |
+ * | `data-tbr-cache`     | Cache config: `mem` (defaults) or `mem:<entries>:<ttlMs>` |
+ * | `data-tbr-persist`   | If set, enable IndexedDB persistent cache (value = max MB) |
+ *
+ * ## Custom element (`<tbr-thumb>`)
+ *
+ * | Attribute | Description                            |
+ * |-----------|----------------------------------------|
+ * | `src`     | Media URL to thumbnail (alias for `url`) |
+ * | `url`     | Media URL to thumbnail                  |
+ * | `connect` | Per-element connect override            |
+ * | `lazy`    | `"true"` to load only when in viewport  |
+ * | `alt`     | Accessible label for the thumbnail      |
+ *
+ * ## CSS custom properties
+ *
+ * | Property               | Default                    |
+ * |------------------------|----------------------------|
+ * | `--tbr-radius`         | `14px`                     |
+ * | `--tbr-bg`             | `#0d1225`                  |
+ * | `--tbr-shimmer`        | `rgba(255,255,255,0.03)`   |
+ * | `--tbr-spinner-color`  | `#7c5cff`                  |
  */
 
-import type { CacheBackend } from "./cache.js";
+import { configure, initThumbnails, enablePersistentCache, createThumbMarkup } from "./dom.js";
+import { define, ThumbrellaThumb } from "./element.js";
+import { Client, parseConnect } from "./client.js";
 import { createMemoryCache } from "./cache.js";
-import { Client, parseConnect } from "./api.js";
-import { Result, Media, EncodedJpeg, Status, Source, FileKind } from "./types.js";
+import type { CacheBackend } from "./cache.js";
 
-// Re-exports — everything you need in the browser from one import
+// ── Read config from the <script> tag that loaded us ─────────────────────
 
-export { Client, parseConnect } from "./api.js";
-export { Result, Media, EncodedJpeg, Status, Source, FileKind } from "./types.js";
-export { createMemoryCache } from "./cache.js";
-export type { CacheBackend } from "./cache.js";
+const currentScript: HTMLScriptElement | null =
+  (typeof document !== "undefined" && document.currentScript) as HTMLScriptElement | null;
+const ds = currentScript?.dataset ?? {};
 
-// Constants
-
-/** 1x1 transparent pixel — prevents browsers from reloading the page when src="" is used. */
-export const CLEAR_PIXEL =
-  "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
-
-/** Dark 5:4 SVG shown while a thumbnail is loading. */
-export const PLACEHOLDER_SVG =
-  "data:image/svg+xml," +
-  encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 5 4"><rect fill="#2a2d4a" width="5" height="4"/></svg>',
-  );
-
-// Global configuration
-
-interface BrowserConfig {
-  connect?: string;
-  caches?: CacheBackend[];
+// 1. Connect string — set global fallback so all elements inherit it.
+const connect = ds.tbrConnect;
+if (connect && typeof window !== "undefined") {
+  (window as unknown as Record<string, string>).TBR_CONNECT = connect;
 }
 
-const _config: BrowserConfig = {};
+// 2. Cache config.
+//    "mem"            → defaults (500 entries, 5 min TTL)
+//    "mem:500:300000" → custom max entries + TTL in ms
+const cacheRaw = ds.tbrCache ?? "";
+const caches: CacheBackend[] = [];
 
-/**
- * Configure global defaults.
- *
- * Call once, early (before any `<tbr-thumb>` elements).
- *
- * ```ts
- * configure({ connect: "https://thumbrella.dev/api" });
- * ```
- */
-export function configure(opts: BrowserConfig): void {
-  if (opts.connect !== undefined) _config.connect = opts.connect;
-  if (opts.caches !== undefined) _config.caches = opts.caches;
+if (!cacheRaw || cacheRaw.startsWith("mem")) {
+  const parts = cacheRaw.split(":");
+  const max = parts[1] ? parseInt(parts[1], 10) : 500;
+  const ttl = parts[2] ? parseInt(parts[2], 10) : 300_000;
+  caches.push(createMemoryCache({ max, ttl }));
 }
 
-// IndexedDB cache
-
-let _persistentCache: CacheBackend | null = null;
-
-/**
- * Create a persistent thumbnail cache backed by IndexedDB.
- *
- * Mirrors {@link createMemoryCache} — returns a {@link CacheBackend}
- * that survives page reloads.  Pass it to a Client, or call this on its
- * own to push it onto the global configuration.
- *
- * @param maxMb  Maximum storage in megabytes (default 5).
- */
-export function createBrowserCache(maxMb = 5): CacheBackend {
-  return createIndexedDbCache(maxMb);
+// 3. Persistent IndexedDB cache (opt-in).
+//    data-tbr-persist    → 5 MB default
+//    data-tbr-persist="20" → 20 MB
+if (ds.tbrPersist !== undefined) {
+  const mb = parseInt(ds.tbrPersist, 10) || 5;
+  enablePersistentCache(mb);
 }
 
-/**
- * Enable persistent thumbnail caching via IndexedDB on the global config.
- *
- * Pushes a {@link createBrowserCache IndexedDB cache} onto the global
- * configuration so it's shared by all thumbnails.  Call once — the cache
- * survives page reloads.
- *
- * @param maxMb  Maximum storage in megabytes (default 5).
- */
-export function enablePersistentCache(maxMb = 5): CacheBackend {
-  if (_persistentCache) return _persistentCache;
-  _persistentCache = createBrowserCache(maxMb);
-  if (_config.caches) {
-    _config.caches.push(_persistentCache);
-  } else {
-    _config.caches = [_persistentCache];
-  }
-  return _persistentCache;
-}
+// 4. Apply global configuration so every element inherits these.
+configure({ connect, caches });
 
-// Shared client
+// ── <tbr-thumb> — short alias with `src` mirroring ───────────────────────
 
-let _sharedClient: Client | null = null;
+let _aliasRegistered = false;
 
-/**
- * Get (or create) a shared Thumbrella {@link Client} for the page.
- *
- * @param connect  Optional connect string (falls back to `window.TBR_CONNECT`).
- */
-export function getClient(connect?: string): Client {
-  if (!_sharedClient) {
-    _sharedClient = new Client({
-      connect: connect ??
-        (typeof window !== "undefined"
-          ? (window as unknown as Record<string, string>).TBR_CONNECT
-          : undefined),
-      cacheBackends: [createMemoryCache()],
-    });
-  }
-  return _sharedClient;
-}
+function registerAlias(): void {
+  if (_aliasRegistered || typeof customElements === "undefined") return;
 
-// Markup & classes
+  // Subclass that mirrors `src` ↔ `url` so HTML authors can use the
+  // more natural `src` attribute (like <img>).  `url` still works too.
+  class TbrThumb extends ThumbrellaThumb {
+    static override observedAttributes = ["src", "url", "connect", "lazy"];
 
-const _TBR_CLASSES = [
-  "tbr-loaded", "tbr-requested", "tbr-intermediate",
-  "tbr-has-intermediate", "tbr-success", "tbr-failed",
-  "tbr-overloaded", "tbr-unavailable", "tbr-offscreen",
-];
-
-/**
- * Apply lifecycle state classes from a {@link Result} to a DOM element.
- *
- * Removes all existing `tbr-*` classes first, then sets
- * `tbr-loaded` plus the status-specific class (`tbr-success`,
- * `tbr-failed`, etc.).
- */
-export function applyResultClasses(el: HTMLElement, result: Result): void {
-  el.classList.remove(..._TBR_CLASSES);
-  el.classList.add("tbr-loaded", "tbr-" + result.status.toLowerCase());
-}
-
-// Image helpers
-
-const _placeholderBlobs = new Map<number, string>();
-
-/**
- * Return the "thumbnail unavailable" placeholder JPEG as a data URI.
- *
- * This is the same image embedded in every {@link Result} that fails —
- * useful when you need to show the failed state manually.
- */
-export function failedPlaceholderDataUri(): string {
-  return `data:image/jpeg;base64,${_FAILED_B64}`;
-}
-
-/**
- * Return a base64 data URI for the thumbnail inside a {@link Media}
- * object, or `null` if the media has no thumbnail data.
- */
-export function mediaDataUri(media: Media | null): string | null {
-  const thumb = media?.thumbnail;
-  if (!thumb || thumb.length === 0) return null;
-  return `data:image/jpeg;base64,${btoa(String.fromCharCode(...thumb.bytes))}`;
-}
-
-/**
- * Create an `<img>` element from a Media object's thumbnail.
- *
- * Returns `null` if the media has no thumbnail data.  When the media
- * represents a shared placeholder image, the blob URL is cached so
- * every call returns the same `<img>` resource.
- *
- * ```ts
- * const img = createThumbImg(result.media);
- * if (img) container.appendChild(img);
- * ```
- */
-export function createThumbImg(media: Media | null): HTMLImageElement | null {
-  const thumb = media?.thumbnail;
-  if (!thumb || thumb.length === 0) return null;
-
-  // Shared placeholder image — cache the blob URL so every call for
-  // the same placeholder reuses one `<img>` resource.
-  if (media!.placeholder) {
-    const cached = _placeholderBlobs.get(thumb.key);
-    const img = document.createElement("img");
-    if (cached) {
-      img.src = cached;
-      return img;
+    attributeChangedCallback(name: string, oldVal: string | null, newVal: string | null): void {
+      if (name === "src") {
+        // Mirror to `url` so the parent class picks it up.
+        if (newVal !== null) {
+          this.setAttribute("url", newVal);
+        }
+      } else {
+        super.attributeChangedCallback(name, oldVal, newVal);
+      }
     }
-    const blobUrl = URL.createObjectURL(
-      new Blob([thumb.bytes as BlobPart], { type: "image/jpeg" }),
-    );
-    _placeholderBlobs.set(thumb.key, blobUrl);
-    img.src = blobUrl;
-    return img;
   }
 
-  const img = document.createElement("img");
-  const blobUrl = URL.createObjectURL(
-    new Blob([thumb.bytes as BlobPart], { type: "image/jpeg" }),
-  );
-  img.src = blobUrl;
-  img.addEventListener("load", () => URL.revokeObjectURL(blobUrl), { once: true });
-  return img;
+  customElements.define("tbr-thumb", TbrThumb);
+  _aliasRegistered = true;
 }
 
-// Internal helpers
+// ── Inject light-DOM styles ───────────────────────────────────────────────
 
-// Embedded "thumbnail unavailable" placeholder JPEG (250x200).
-const _FAILED_B64 =
-  "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" +
-  "0FoLQWgtBaC0FoDQWgNBaA0BoDQGggAIED//2Q==";
+function injectLightDomStyles(): void {
+  if (typeof document === "undefined") return;
+  const id = "tbr-light-dom-styles";
+  if (document.getElementById(id)) return;
 
-function createIndexedDbCache(maxMb: number): CacheBackend {
-  const DB_NAME = "thumbrella-cache";
-  const STORE_NAME = "thumbnails";
+  const style = document.createElement("style");
+  style.id = id;
+  // language=CSS
+  style.textContent = `
+/* Thumbrella light-DOM styles (auto-injected by browser.js).
+   Only needed when using initThumbnails() — the <tbr-thumb> custom element
+   uses Shadow DOM and does not depend on these rules. */
+.tbr-wrap {
+  display: block;
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--tbr-radius, 14px);
+  background: var(--tbr-bg, #0d1225);
+}
+.tbr-wrap img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.tbr-placeholder { z-index: 1; transition: opacity 0.25s ease; }
+.tbr-final { z-index: 3; opacity: 0; transition: opacity 0.35s ease; }
+.tbr-loaded .tbr-final { opacity: 1; }
+.tbr-requested .tbr-placeholder,
+.tbr-intermediate .tbr-placeholder {
+  animation: tbr-shimmer 2s ease-in-out infinite;
+}
+.tbr-wrap::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: linear-gradient(
+    105deg,
+    var(--tbr-shimmer, rgba(255,255,255,0.03)) 40%,
+    rgba(255,255,255,0.09) 50%,
+    var(--tbr-shimmer, rgba(255,255,255,0.03)) 60%
+  );
+  background-size: 200% 100%;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.tbr-requested::before,
+.tbr-intermediate::before { opacity: 1; animation: tbr-sweep 2.2s ease-in-out infinite; }
+.tbr-loaded::before, .tbr-has-intermediate::before { opacity: 0; }
+.tbr-has-intermediate .tbr-placeholder { animation: none; }
+.tbr-loaded .tbr-placeholder { opacity: 0; }
+.tbr-spinner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+  z-index: 4;
+}
+.tbr-spinner::after {
+  content: "";
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255,255,255,0.15);
+  border-top-color: var(--tbr-spinner-color, #7c5cff);
+  border-radius: 50%;
+  animation: tbr-spin 0.8s linear infinite;
+}
+.tbr-requested .tbr-spinner,
+.tbr-intermediate .tbr-spinner { opacity: 1; }
+.tbr-loaded .tbr-spinner { opacity: 0; }
+@keyframes tbr-shimmer {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.12); }
+}
+@keyframes tbr-sweep {
+  0% { background-position: -100% 0; }
+  100% { background-position: 200% 0; }
+}
+@keyframes tbr-spin {
+  to { transform: rotate(360deg); }
+}`;
 
-  let dbPromise: Promise<IDBDatabase> | null = null;
+  document.head.appendChild(style);
+}
 
-  function openDb(): Promise<IDBDatabase> {
-    if (dbPromise) return dbPromise;
-    dbPromise = new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, 1);
-      req.onupgradeneeded = () => {
-        req.result.createObjectStore(STORE_NAME);
-      };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-    return dbPromise;
-  }
+// ── Boot ──────────────────────────────────────────────────────────────────
 
-  async function estimateSize(): Promise<number> {
-    const db = await openDb();
-    const tx = db.transaction(STORE_NAME, "readonly");
-    const store = tx.objectStore(STORE_NAME);
-    let size = 0;
-    return new Promise((resolve) => {
-      const cursorReq = store.openCursor();
-      cursorReq.onsuccess = () => {
-        const cursor = cursorReq.result;
-        if (cursor) {
-          size += (cursor.value as Uint8Array).byteLength;
-          cursor.continue();
-        } else {
-          resolve(size);
-        }
-      };
-      cursorReq.onerror = () => resolve(size);
-    });
-  }
+function boot(): void {
+  if (typeof document === "undefined") return;
 
-  async function evict(db: IDBDatabase, needed: number): Promise<void> {
-    const tx = db.transaction(STORE_NAME, "readwrite");
-    const store = tx.objectStore(STORE_NAME);
-    const keys: string[] = [];
-    return new Promise((resolve) => {
-      const cursorReq = store.openCursor();
-      cursorReq.onsuccess = () => {
-        const cursor = cursorReq.result;
-        if (cursor) {
-          keys.push(cursor.key as string);
-          cursor.continue();
-        } else {
-          let freed = 0;
-          for (const key of keys) {
-            if (freed >= needed) break;
-            const val = (cursor as unknown as { value?: Uint8Array })?.value;
-            if (val) freed += val.byteLength;
-            store.delete(key);
-          }
-          resolve();
-        }
-      };
-      cursorReq.onerror = () => resolve();
-    });
-  }
+  // 1. Ensure the canonical <thumbrella-thumb> element is registered.
+  //    (element.ts calls define() on import, but we call it again for safety;
+  //     it's a no-op after the first registration.)
+  define();
 
-  const maxBytes = maxMb * 1024 * 1024;
+  // 2. Register the shorter <tbr-thumb> alias.
+  registerAlias();
 
-  return {
-    async get(key: string): Promise<Uint8Array | undefined> {
-      try {
-        const db = await openDb();
-        return new Promise((resolve) => {
-          const tx = db.transaction(STORE_NAME, "readonly");
-          const req = tx.objectStore(STORE_NAME).get(key);
-          req.onsuccess = () => resolve(req.result as Uint8Array | undefined);
-          req.onerror = () => resolve(undefined);
-        });
-      } catch {
-        return undefined;
-      }
-    },
+  // 3. Inject light-DOM styles for initThumbnails() users.
+  injectLightDomStyles();
+}
 
-    async set(key: string, value: Uint8Array): Promise<void> {
-      try {
-        const db = await openDb();
-        const currentSize = await estimateSize();
-        if (currentSize + value.byteLength > maxBytes) {
-          await evict(db, currentSize + value.byteLength - maxBytes);
-        }
-        return new Promise((resolve) => {
-          const tx = db.transaction(STORE_NAME, "readwrite");
-          tx.objectStore(STORE_NAME).put(value, key);
-          tx.oncomplete = () => resolve();
-          tx.onerror = () => resolve();
-        });
-      } catch {
-        // Silently fail — caching is best-effort.
-      }
-    },
+boot();
 
-    reset(): void {
-      try {
-        openDb().then(db => {
-          const tx = db.transaction(STORE_NAME, "readwrite");
-          tx.objectStore(STORE_NAME).clear();
-        }).catch(() => {});
-      } catch { /* best-effort */ }
-    },
+// ── Public API (window.__TBR__) ───────────────────────────────────────────
+
+if (typeof window !== "undefined") {
+  (window as unknown as Record<string, unknown>).__TBR__ = {
+    configure,
+    initThumbnails,
+    createThumbMarkup,
+    Client,
+    parseConnect,
+    createMemoryCache,
+    enablePersistentCache,
   };
 }
+
+// Re-export for consumers that `import` this module.
+export {
+  configure,
+  initThumbnails,
+  enablePersistentCache,
+  createThumbMarkup,
+  Client,
+  parseConnect,
+  createMemoryCache,
+  ThumbrellaThumb,
+  define,
+};

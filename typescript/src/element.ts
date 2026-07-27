@@ -28,14 +28,10 @@
 
 import { Client, parseConnect } from "./api.js";
 import { Status, Result } from "./types.js";
-import type { CacheBackend } from "./cache.js";
-import { createMemoryCache } from "./cache.js";
-import { configure, enablePersistentCache } from "./browser.js";
+import { getClient, resolveConnect } from "./browser.js";
+import { CLEAR_PIXEL, PLACEHOLDER_SVG } from "./browser.js";
 
 // Module state
-
-let _sharedClient: Client | null = null;
-let _sharedCaches: CacheBackend[] | null = null;
 
 const _blobCache = new Map<number, string>();
 
@@ -178,16 +174,7 @@ styles.replaceSync(`
   }
 `);
 
-// Placeholder constants
-
-const PLACEHOLDER_SVG =
-  "data:image/svg+xml," +
-  encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 5 4"><rect fill="#2a2d4a" width="5" height="4"/></svg>',
-  );
-
-const CLEAR_PIXEL =
-  "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+// Placeholder constants (imported from browser.ts)
 
 //
 // Exports
@@ -278,35 +265,11 @@ export class TbrThumb extends HTMLElement {
     if (!this.isConnected || !this.#url || this.#loaded || this.#pending) return;
     this.#pending = true;
 
-    const connect = this.#resolveConnect();
+    const connect = resolveConnect(this);
     const client = connect
-      ? new Client({ connect, cacheBackends: _sharedCaches ?? undefined })
-      : getSharedClient();
+      ? new Client(connect)
+      : getClient();
 
-    const allCaches = client.cacheBackends;
-
-    // 1. Check byte-level caches.
-    const cacheKey = `tbr:${this.#url}`;
-    for (const cache of allCaches) {
-      const hit = await cache.get(cacheKey);
-      if (hit) {
-        const blobUrl = URL.createObjectURL(new Blob([hit as BlobPart], { type: "image/jpeg" }));
-        this.#finalImg.src = blobUrl;
-        this.classList.add("tbr-loaded", "tbr-success");
-        this.#loaded = true;
-        this.#pending = false;
-        this.dispatchEvent(
-          new CustomEvent("tbr:loaded", {
-            bubbles: true,
-            composed: true,
-            detail: { url: this.#url, status: "success", source: "cache", bytes: hit.length, placeholder: false },
-          }),
-        );
-        return;
-      }
-    }
-
-    // 2. Request from server.
     this.classList.add("tbr-requested");
 
     try {
@@ -315,13 +278,6 @@ export class TbrThumb extends HTMLElement {
           this.classList.add("tbr-intermediate");
           this.#applyIntermediate(result);
           continue;
-        }
-
-        if (result.status === Status.SUCCESS && result.media?.thumbnail) {
-          const bytes = result.media.thumbnail.bytes;
-          for (const cache of allCaches) {
-            try { await cache.set(cacheKey, bytes); } catch { /* best-effort */ }
-          }
         }
 
         this.#applyResult(result);
@@ -363,16 +319,7 @@ export class TbrThumb extends HTMLElement {
       new CustomEvent("tbr:loaded", {
         bubbles: true,
         composed: true,
-        detail: {
-          url: result.url,
-          status: result.status,
-          source: result.source ?? null,
-          kind: result.media?.kind ?? null,
-          duration: result.duration ?? null,
-          message: result.message ?? null,
-          bytes: thumb?.bytes.length ?? 0,
-          placeholder: !!result.media?.placeholder,
-        },
+        detail: { result },
       }),
     );
   }
@@ -380,21 +327,7 @@ export class TbrThumb extends HTMLElement {
   // Connect resolution
 
   #resolveConnect(): string | undefined {
-    const attr = this.getAttribute("connect");
-    if (attr) return attr;
-
-    let parent = this.parentElement;
-    while (parent) {
-      const p = (parent as HTMLElement).dataset.tbrConnect;
-      if (p) return p;
-      if (parent instanceof ShadowRoot) {
-        parent = parent.host.parentElement;
-      } else {
-        parent = parent.parentElement;
-      }
-    }
-
-    return resolveGlobalConnect();
+    return resolveConnect(this);
   }
 }
 
@@ -439,18 +372,6 @@ export function tbrSetup(connectOrOpts?: string | SetupConfig): void {
     (window as unknown as Record<string, string>).TBR_CONNECT = explicitConnect;
   }
 
-  // Persist only available via opts object or script attribute.
-  const persist = typeof connectOrOpts === "object"
-    ? connectOrOpts.persist
-    : scriptDs.tbrPersist;
-
-  if (persist !== undefined && persist !== false) {
-    const mb = typeof persist === "number" ? persist : 5;
-    enablePersistentCache(mb);
-  }
-
-  configure({ connect: explicitConnect });
-
   if (typeof customElements !== "undefined") {
     customElements.define("tbr-thumb", TbrThumb);
   }
@@ -460,29 +381,10 @@ export function tbrSetup(connectOrOpts?: string | SetupConfig): void {
 
 // Convenience re-exports for bundler users who only import element.js.
 export { Client, parseConnect } from "./api.js";
-export { createMemoryCache } from "./cache.js";
 
 //
 // Internal helpers
 //
-
-function getSharedClient(): Client {
-  if (!_sharedClient) {
-    _sharedCaches = [createMemoryCache()];
-    _sharedClient = new Client({
-      connect: resolveGlobalConnect(),
-      cacheBackends: _sharedCaches,
-    });
-  }
-  return _sharedClient;
-}
-
-function resolveGlobalConnect(): string | undefined {
-  if (typeof window !== "undefined") {
-    return (window as unknown as Record<string, string>).TBR_CONNECT;
-  }
-  return undefined;
-}
 
 function cachedBlobUrl(key: number, bytes: Uint8Array): string {
   const existing = _blobCache.get(key);
