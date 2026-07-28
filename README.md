@@ -19,8 +19,6 @@ registry.
 | [typescript/](./typescript) | `npm`  | [@thumbrella/client](https://www.npmjs.com/package/@thumbrella/client) | Prerelease  |
 | [python/](./python)    | `PyPI`      | [thumbrella-client](https://pypi.org/project/thumbrella-client/) | Prerelease  |
 | [rust/](./rust)        | `Crates.io` | [thumbrella-client](https://crates.io/crates/thumbrella-client) | Prerelease  |
-| [react/](./react)      | `npm`       | [@thumbrella/react](https://www.npmjs.com/package/@thumbrella/react) | ~~Unreleased~~  |
-| [astro/](./astro)      | `npm`       | [@thumbrella/astro](https://www.npmjs.com/package/@thumbrella/astro) | ~~Unreleased~~  |
 
 See each subdirectory's README for install instructions, quickstart examples,
 and API details.

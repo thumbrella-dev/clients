@@ -7,16 +7,10 @@ for images, video, documents, and more.
 [![Python](https://img.shields.io/pypi/pyversions/thumbrella-client)](https://pypi.org/project/thumbrella-client/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/thumbrella-dev/clients/blob/main/LICENSE)
 
-> Thumbrella is still in prerelease. The server functionality is operational,
-> but several production components have yet to appear. Recommended for early
-> evaluation only.
-
 The [client git repository](https://github.com/thumbrella-dev/clients) also 
 has packages for other languages and environments. See 
 [Typescript](https://www.npmjs.com/package/@thumbrella/client), 
-[Rust](https://crates.io/crates/thumbrella-client), 
-[React](https://www.npmjs.com/package/@thumbrella/react), 
-[Astro](https://www.npmjs.com/package/@thumbrella/astro), and more coming soon.
+[Rust](https://crates.io/crates/thumbrella-client), and more coming soon.
 
 ## Features
 
@@ -92,7 +86,7 @@ The client reads `$TBR_CONNECT` by default. Pass a connect string to override:
 thumbrella.Client("http://localhost:3114")
 
 # Cloud service with auth token
-thumbrella.Client("https://api.thumbrella.dev,tbr_e_oQftPlhB6ulGkdu5lILXKZBM")
+thumbrella.Client("https://cloud.thumbrella.dev,tbr_e_3QnzBcWx7KpRmYT2000example")
 
 # Custom server with handshake value
 thumbrella.Client("https://my-server.example.com,my-handshake")

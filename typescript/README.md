@@ -6,10 +6,6 @@ thumbnail server for images, video, documents, and more.
 [![npm version](https://img.shields.io/npm/v/@thumbrella/client)](https://www.npmjs.com/package/@thumbrella/client)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/thumbrella-dev/clients/blob/main/LICENSE)
 
-> Thumbrella is still in prerelease. The server functionality is operational,
-> but several production components have yet to appear. Recommended for early
-> evaluation only.
-
 The [client git repository](https://github.com/thumbrella-dev/clients) also has
 packages for other languages and environments. See
 [Python](https://pypi.org/project/thumbrella-client/),
@@ -90,10 +86,6 @@ Using the bundled CLI:
 ```bash
 # Upload a file to a public host, then thumbnail the URL
 npx thumbrella-file ./photo.jpg thumb.jpg
-
-# Tunnel mode, serve from your machine, no middleman
-npm install localtunnel
-npx thumbrella-file --tunnel ./video.mp4 thumb.jpg
 ```
 
 ### Where to Run It
