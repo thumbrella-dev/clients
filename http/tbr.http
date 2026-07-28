@@ -4,7 +4,7 @@
 #@host = http://localhost:3114
 
 @token = none
-#@token = tbr_x_oQftPlhB6ulGkdu5lILXKZBM
+#@token = tbr_e_3QnzBcWx7KpRmYT2000example
 
 
 ### Server check (and token check for main online server)

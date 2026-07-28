@@ -6,15 +6,10 @@ thumbnail server for images, video, documents, and more.
 [![npm version](https://img.shields.io/npm/v/@thumbrella/client)](https://www.npmjs.com/package/@thumbrella/client)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/thumbrella-dev/clients/blob/main/LICENSE)
 
-> Thumbrella is still in prerelease. The server functionality is operational,
-> but several production components have yet to appear. Recommended for early
-> evaluation only.
-
 The [client git repository](https://github.com/thumbrella-dev/clients) also has
 packages for other languages and environments. See
 [Python](https://pypi.org/project/thumbrella-client/),
 [Rust](https://crates.io/crates/thumbrella-client),
-
 
 ## Features
 
@@ -37,7 +32,7 @@ npm install @thumbrella/client
 ```ts
 import { Client } from "@thumbrella/client";
 
-const tbr = await new Client().verify();
+const tbr = await new Client();
 const result = await tbr.thumb("https://demo.thumbrella.dev/media/pocket-game.webp");
 
 console.log(result.status, result.media!.thumbnail.length, "bytes");
@@ -64,10 +59,8 @@ for await (const r of tbr.stream(media_urls)) {
   tbrSetup("https://demo.thumbrella.dev");
 </script>
 
-<tbr-thumb src="https://demo.thumbrella.dev/media/space-colony.jpg"
-           style="width:200px"></tbr-thumb>
-<tbr-thumb src="https://demo.thumbrella.dev/media/stanford-bunny.stl"
-           style="width:200px"></tbr-thumb>
+<tbr-thumb src="https://demo.thumbrella.dev/media/space-colony.jpg"></tbr-thumb>
+<tbr-thumb src="https://demo.thumbrella.dev/media/stanford-bunny.stl"></tbr-thumb>
 ```
 
 One `tbrSetup` call and `<tbr-thumb>` elements handle everything: shimmer
@@ -85,17 +78,6 @@ caching.  Zero configuration beyond the connect string.
 Node users only import from the root.  Browser users import from `./element`
 or `./browser`.
 
-Using the bundled CLI:
-
-```bash
-# Upload a file to a public host, then thumbnail the URL
-npx thumbrella-file ./photo.jpg thumb.jpg
-
-# Tunnel mode, serve from your machine, no middleman
-npm install localtunnel
-npx thumbrella-file --tunnel ./video.mp4 thumb.jpg
-```
-
 ### Where to Run It
 
 The client uses only `fetch` and standard APIs, so it works anywhere modern JS
@@ -112,8 +94,8 @@ Cloud service. Both are configured using the `$TBR_CONNECT` environment variable
 Alternatively, pass a connect string to the `Client` constructor:
 
 ```ts
-new Client({ connect: "http://localhost:3114" });                   // local dev
-new Client({ connect: "https://cloud.thumbrella.dev,tbr_s_..." });  // cloud token
+new Client("http://localhost:3114");             // local dev
+new Client("tbr_e_3QnzBcWx7KpRmYT2000example");  // cloud token
 ```
 
 Thumbrella provides a [demo gallery](https://demo.thumbrella.dev) and server

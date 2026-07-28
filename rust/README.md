@@ -4,19 +4,16 @@ Rust client for [Thumbrella](https://thumbrella.dev), a fast thumbnail server
 for images, video, documents, and more.
 
 [![Crates.io](https://img.shields.io/crates/v/thumbrella-client)](https://crates.io/crates/thumbrella-client)
-[![docs.rs](https://img.shields.io/docsrs/thumbrella-client)](https://docs.rs/thumbrella-client)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/thumbrella-dev/clients/blob/main/LICENSE)
 
-> Thumbrella is still in prerelease. The server functionality is operational,
+> Thumbrella is still in early releases. The server functionality is operational,
 > but several production components have yet to appear. Recommended for early
 > evaluation only.
 
 The [client git repository](https://github.com/thumbrella-dev/clients) also has
 packages for other languages and environments. See
 [TypeScript](https://www.npmjs.com/package/@thumbrella/client),
-[Python](https://pypi.org/project/thumbrella-client/),
-[React](https://www.npmjs.com/package/@thumbrella/react),
-[Astro](https://www.npmjs.com/package/@thumbrella/astro), and more coming soon.
+[Python](https://pypi.org/project/thumbrella-client/), and more coming soon.
 
 ## Features
 
