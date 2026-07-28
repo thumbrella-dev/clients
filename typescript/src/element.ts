@@ -9,7 +9,7 @@
  * ```html
  * <script type="module">
  *   import { tbrSetup } from "https://cdn.jsdelivr.net/npm/@thumbrella/client@0.3/dist/element.js";
- *   tbrSetup({ connect: "tbr_p_xxxx" });
+ *   tbrSetup({ connect: "tbr_e_3QnzBcWx7KpRmYT2000example" });
  * </script>
  * <tbr-thumb src="https://example.com/photo.jpg"></tbr-thumb>
  * ```
