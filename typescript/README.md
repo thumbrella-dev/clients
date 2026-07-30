@@ -15,12 +15,11 @@ packages for other languages and environments. See
 
 - Zero runtime dependencies, only needs `fetch`
 - Runs in Node 18+, Deno, Bun, and modern browsers
+- Optional `<tbr-thumb>` element for browser environments
 - Stream results as the server renders thumbnails
-- In-memory LRU cache takes full advantage of HTTP cache headers
-- The client and server always provide placeholder images, even when disconnected
-- Optional `verify()` methods promote failed results into exceptions
-- Typed results with media classification and metadata
-- Bundled CLI for thumbnailing local files
+- LRU cache takes full advantage of HTTP cache headers and can persist
+- Always provide placeholder images, even when disconnected
+- Typed results with simple media metadata
 - Thumbrella server supports hundreds of formats
 
 ## Quickstart
@@ -33,19 +32,16 @@ npm install @thumbrella/client
 import { Client } from "@thumbrella/client";
 
 const tbr = await new Client();
-const result = await tbr.thumb("https://demo.thumbrella.dev/media/pocket-game.webp");
 
+// Fetch a single thumbnail
+const result = await tbr.thumb("https://demo.thumbrella.dev/media/pocket-game.webp");
 console.log(result.status, result.media!.thumbnail.length, "bytes");
 
+// Stream results of thumbnail batch
 const media_urls = [
   "https://demo.thumbrella.dev/media/padres-stereo.exr",
   "https://demo.thumbrella.dev/media/golden-gate.exr",
 ];
-
-// Batch many URLs
-const results = await tbr.batch(media_urls);
-
-// Stream results as they complete
 for await (const r of tbr.stream(media_urls)) {
   console.log(r.url, r.status);
 }
@@ -55,7 +51,7 @@ for await (const r of tbr.stream(media_urls)) {
 
 ```html
 <script type="module">
-  import { tbrSetup } from "@thumbrella/client/element";
+  import { tbrSetup } from "@thumbrella/client/element.js";
   tbrSetup("https://demo.thumbrella.dev");
 </script>
 
@@ -63,20 +59,19 @@ for await (const r of tbr.stream(media_urls)) {
 <tbr-thumb src="https://demo.thumbrella.dev/media/stanford-bunny.stl"></tbr-thumb>
 ```
 
-One `tbrSetup` call and `<tbr-thumb>` elements handle everything: shimmer
-skeleton, spinner, streaming placeholders, failure images, and byte-level
-caching.  Zero configuration beyond the connect string.
+One `tbrSetup` call to configure and register `<tbr-thumb>` elements: 
+spinner, placeholders, failures, caching, and lazy loading.
 
 ## Module Structure
 
 | Import                               | Contents                                     |
 |--------------------------------------|----------------------------------------------|
 | `@thumbrella/client`                 | `Client`, `Result`, `Media`, `EncodedJpeg`, types |
-| `@thumbrella/client/element`         | `<tbr-thumb>` custom element, `tbrSetup()`    |
-| `@thumbrella/client/browser`         | `getClient()`, `createThumbImg()`, `createBrowserCache()`, helpers |
+| `@thumbrella/client/element.js`      | `<tbr-thumb>` custom element, `tbrSetup()`   |
+| `@thumbrella/client/browser.js`      | lighter weight browser functions             |
 
-Node users only import from the root.  Browser users import from `./element`
-or `./browser`.
+Node users only import from the root.  Browser users import from `element.js`
+or `browser.js`.
 
 ### Where to Run It
 
@@ -94,8 +89,9 @@ Cloud service. Both are configured using the `$TBR_CONNECT` environment variable
 Alternatively, pass a connect string to the `Client` constructor:
 
 ```ts
-new Client("http://localhost:3114");             // local dev
+new Client("http://localhost:3114");             // local server
 new Client("tbr_e_3QnzBcWx7KpRmYT2000example");  // cloud token
+new Client("https://demo.thumbrella.dev");       // free demo server
 ```
 
 Thumbrella provides a [demo gallery](https://demo.thumbrella.dev) and server
