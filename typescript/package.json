@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "browser": "dist/element.js",
-  "jsdelivr": "dist/element.js",
+  "jsdelivr": "element.js",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -26,10 +26,13 @@
   },
   "files": [
     "dist/",
-    "README.md"
+    "README.md",
+    "element.js",
+    "browser.js"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && npm run build:bundle",
+    "build:bundle": "npx tsx scripts/bundle.ts",
     "bench": "npx tsx scripts/bench.ts"
   },
   "keywords": [
@@ -55,6 +58,7 @@
   "devDependencies": {
     "@types/node": "^25.9.1",
     "dotenv": "^16.4.5",
+    "esbuild": "^0.28.1",
     "tsx": "^4.23.0",
     "typescript": "^5.6.3"
   }
