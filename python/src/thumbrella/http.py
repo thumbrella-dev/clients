@@ -11,6 +11,8 @@ import requests
 from .constants import DEFAULT_BASE, MAX_BACKOFF, HTTP_BACKOFF_TICK, HTTP_TIMEOUT
 from .errors import ConnectionError, TimeoutError
 
+_DEFAULT_HOST = urllib.parse.urlparse(DEFAULT_BASE).hostname or "cloud.thumbrella.dev"
+
 if TYPE_CHECKING:
     import aiohttp
 
@@ -38,7 +40,7 @@ def parse_connect(
             session.headers["Authorization"] = f"Bearer {connect}"
         else:
             session.headers["x-tbr-handshake"] = connect
-        return DEFAULT_BASE, "cloud.thumbrella.dev:0"
+        return DEFAULT_BASE, f"{_DEFAULT_HOST}:0"
 
     segments = connect.split(",")
     server = segments[0].strip()

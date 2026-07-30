@@ -13,7 +13,7 @@ import {
 
 //  constants 
 
-const DEFAULT_BASE = "https://cloud.thumbrella.dev/";
+const DEFAULT_BASE = "https://cloud.thumbrella.dev";
 const MAX_BACKOFF_MS = 60_000;
 const HTTP_TIMEOUT_MS = 12_000;
 

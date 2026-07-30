@@ -8,7 +8,7 @@ use std::time::Duration;
 use crate::cache::{Cache, MemoryCache};
 use crate::types::*;
 
-const DEFAULT_BASE: &str = "https://cloud.thumbrella.dev/";
+const DEFAULT_BASE: &str = "https://cloud.thumbrella.dev";
 const HTTP_TIMEOUT_SECS: u64 = 12;
 const MAX_BACKOFF_SECS: u64 = 60;
 
@@ -57,6 +57,16 @@ fn is_auth_token(s: &str) -> bool {
     b.len() >= 6 && b.starts_with(b"tbr_") && b[4].is_ascii_lowercase() && b[5] == b'_'
 }
 
+/// Extract host from a URL like "https://cloud.thumbrella.dev".
+fn host_from_url(url: &str) -> &str {
+    url.split("://")
+        .nth(1)
+        .unwrap_or("")
+        .split('/')
+        .next()
+        .unwrap_or("")
+}
+
 fn parse_connect(connect: Option<&str>) -> ConnectConfig {
     let raw: String = connect.map(String::from)
         .or_else(|| std::env::var("TBR_CONNECT").ok())
@@ -72,7 +82,7 @@ fn parse_connect(connect: Option<&str>) -> ConnectConfig {
         }
         return ConnectConfig {
             base_url: DEFAULT_BASE.into(),
-            host: "cloud.thumbrella.dev".into(),
+            host: host_from_url(DEFAULT_BASE).to_string(),
             headers,
         };
     }
@@ -81,14 +91,7 @@ fn parse_connect(connect: Option<&str>) -> ConnectConfig {
     let (url_part, suffix) = raw.split_once(',').unwrap_or((&raw, ""));
     let base_url = url_part.trim_end_matches('/').to_string();
 
-    let host = url_part
-        .split("://")
-        .nth(1)
-        .unwrap_or("")
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .to_string();
+    let host = host_from_url(url_part).to_string();
 
     let mut headers = HashMap::new();
     for seg in suffix.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
