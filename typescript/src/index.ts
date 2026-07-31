@@ -13,3 +13,4 @@ export {
   ConnectionError,
   TimeoutError,
 } from "./types.js";
+export { BatchedClient, getBatchedClient } from "./browser.js";

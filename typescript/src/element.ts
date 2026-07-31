@@ -26,9 +26,8 @@
  * - `--tbr-bg`           — background colour while loading
  */
 
-import { Client, parseConnect } from "./api.js";
 import { Status, Result } from "./types.js";
-import { getClient, resolveConnect } from "./browser.js";
+import { getBatchedClient, resolveConnect } from "./browser.js";
 import { CLEAR_PIXEL, PLACEHOLDER_SVG } from "./browser.js";
 
 // Module state
@@ -266,14 +265,12 @@ export class TbrThumb extends HTMLElement {
     this.#pending = true;
 
     const connect = resolveConnect(this);
-    const client = connect
-      ? new Client(connect)
-      : getClient();
+    const batched = getBatchedClient(connect);
 
     this.classList.add("tbr-requested");
 
     try {
-      for await (const result of client.stream([this.#url])) {
+      for await (const result of batched.streamUrl(this.#url)) {
         if (result.status === Status.INTERMEDIATE) {
           this.classList.add("tbr-intermediate");
           this.#applyIntermediate(result);
