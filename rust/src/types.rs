@@ -253,8 +253,6 @@ pub struct ResultData {
     pub http_status: Option<u16>,
     #[serde(default)]
     pub source: Option<String>,
-    #[serde(default, rename = "http_status")]
-    pub http_status: Option<u16>,
     #[serde(default)]
     pub media: Option<Media>,
     /// Raw server JSON.
@@ -272,7 +270,6 @@ impl ResultData {
             message: None,
             http_status: None,
             source: Some(source::CLIENT.to_string()),
-            http_status: None,
             media: None,
             raw: serde_json::Value::Null,
         }
