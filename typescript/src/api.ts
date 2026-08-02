@@ -16,6 +16,7 @@ import {
 const DEFAULT_BASE = "https://cloud.thumbrella.dev";
 const MAX_BACKOFF_MS = 60_000;
 const HTTP_TIMEOUT_MS = 12_000;
+const BATCH_MAX_ITEMS = 12;
 
 
 export function parseConnect(connect?: string): ConnectConfig {
@@ -23,15 +24,14 @@ export function parseConnect(connect?: string): ConnectConfig {
     || (typeof process !== "undefined" && process.env.TBR_CONNECT)
     || DEFAULT_BASE;
 
-  // Bare value, no scheme.  Dispatch to auth or handshake by prefix.
+  // Bare value, no scheme.  Only auth tokens are valid without a URL.
   if (!raw.includes("://")) {
-    const headers: Record<string, string> = {};
     if (isAuthToken(raw)) {
-      headers.Authorization = `Bearer ${raw}`;
-    } else {
-      headers["x-tbr-handshake"] = raw;
+      return { baseUrl: DEFAULT_BASE, headers: { Authorization: `Bearer ${raw}` } };
     }
-    return { baseUrl: DEFAULT_BASE, headers };
+    throw new Error(
+      "bare connect string without a URL must be an auth token (tbr_[a-z]_...)",
+    );
   }
 
   let urlPart = raw;
@@ -204,9 +204,21 @@ export class Client {
    * thumbnail is processed. That can be determined with
    * `result.status === Status.INTERMEDIATE`.
    *
+   * URLs are automatically split into chunks of {@link BATCH_MAX_ITEMS}
+   * to respect the server's per-request limit.
+   *
    * See https://thumbrella.dev/docs/api/batch.html for server details.
    */
   async *stream(urls: string[]): AsyncGenerator<Result> {
+    // Split into server-sized chunks.
+    for (let i = 0; i < urls.length; i += BATCH_MAX_ITEMS) {
+      const chunk = urls.slice(i, i + BATCH_MAX_ITEMS);
+      yield* this._streamChunk(chunk);
+    }
+  }
+
+  /** Internal: stream a single chunk of at most BATCH_MAX_ITEMS URLs. */
+  private async *_streamChunk(urls: string[]): AsyncGenerator<Result> {
     const { done, stale } = preflightUrls(urls, this.caches);
 
     for (const url of urls) {

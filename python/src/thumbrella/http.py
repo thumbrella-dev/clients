@@ -34,20 +34,22 @@ def parse_connect(
     if connect is None:
         connect = os.environ.get("TBR_CONNECT", DEFAULT_BASE)
 
-    # Bare value, no scheme.  Dispatch to auth or handshake by prefix.
+    # Bare value, no scheme.  Only auth tokens are valid without a URL.
     if "://" not in connect:
         if _is_auth_token(connect):
             session.headers["Authorization"] = f"Bearer {connect}"
-        else:
-            session.headers["x-tbr-handshake"] = connect
-        return DEFAULT_BASE, f"{_DEFAULT_HOST}:0"
+            return DEFAULT_BASE, f"{_DEFAULT_HOST}:0"
+        raise ValueError(
+            "bare connect string without a URL must be an auth token "
+            "(tbr_?_...)"
+        )
 
     segments = connect.split(",")
     server = segments[0].strip()
     segments = segments[1:]
 
     uri = urllib.parse.urlparse(server)
-    base = f"{uri.scheme}://{uri.netloc}"
+    base = f"{uri.scheme}://{uri.netloc}".rstrip("/")
     host = f"{uri.hostname}:{uri.port}" if uri.port else uri.hostname or ""
 
     for segment in segments:

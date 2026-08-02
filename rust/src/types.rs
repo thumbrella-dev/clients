@@ -12,6 +12,8 @@ pub mod status {
     pub const FAILED: &str = "failed";
     pub const OVERLOADED: &str = "overloaded";
     pub const INTERMEDIATE: &str = "intermediate";
+    /// Batch exceeded server per-request item limit.
+    pub const BATCHLIMIT: &str = "batchlimit";
     /// Client-side synthetic (server unreachable).
     pub const UNAVAILABLE: &str = "unavailable";
 }

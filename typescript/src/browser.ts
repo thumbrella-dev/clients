@@ -140,9 +140,6 @@ export function getClient(connect?: string): Client {
 
 // Batched client — coalesces individual URL requests into batch HTTP calls
 
-/** Maximum URLs submitted per batch request. */
-const BATCH_LIMIT = 12;
-
 /**
  * Turn a push-based callback stream into an `AsyncGenerator`.
  *
@@ -270,32 +267,29 @@ export class BatchedClient {
     if (entries.length === 0) return;
     this.#pending.clear();
 
-    for (let i = 0; i < entries.length; i += BATCH_LIMIT) {
-      const batch = entries.slice(i, i + BATCH_LIMIT);
-      const urlMap = new Map(batch);
+    const urlMap = new Map(entries);
 
-      try {
-        for await (const result of this.#client.stream(
-          batch.map(([u]) => u),
-        )) {
-          const q = urlMap.get(result.url);
-          if (!q) continue;
-          q.push(result);
-          if (result.status !== Status.INTERMEDIATE) {
-            q.done();
-          }
-        }
-      } catch {
-        for (const [url, q] of batch) {
-          q.push(Result.clientFail(url, "batch request failed"));
+    try {
+      for await (const result of this.#client.stream(
+        entries.map(([u]) => u),
+      )) {
+        const q = urlMap.get(result.url);
+        if (!q) continue;
+        q.push(result);
+        if (result.status !== Status.INTERMEDIATE) {
           q.done();
         }
       }
-
-      // Safety net — ensure every queue is closed
-      for (const [, q] of batch) {
+    } catch {
+      for (const [url, q] of entries) {
+        q.push(Result.clientFail(url, "batch request failed"));
         q.done();
       }
+    }
+
+    // Safety net — ensure every queue is closed
+    for (const [, q] of entries) {
+      q.done();
     }
   }
 }

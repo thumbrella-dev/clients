@@ -8,7 +8,7 @@ from typing import Any, AsyncIterator, Sequence
 import requests
 
 from .cache import Cache, MemoryCache, put_all_caches
-from .constants import DEFAULT_BASE, HTTP_TIMEOUT, Source, Status
+from .constants import DEFAULT_BASE, HTTP_TIMEOUT, Source, Status, BATCH_MAX_ITEMS
 from .result import Result, Media, EncodedJpeg
 from .errors import ConnectionError, TimeoutError, VerifyError, ThumbError
 from .http import parse_connect, requests_json, aio_ndjson
@@ -183,21 +183,24 @@ class Client:
         done, stale = _preflight_urls(urls, self.caches)
 
         if stale:
-            try:
-                body = requests_json(
-                    self.session, self.host_name, self.base_url, "POST", "/batch",
-                    json={"items": stale},
-                )
-            except (ConnectionError, TimeoutError) as exc:
-                return _fail_all(done, stale, urls, str(exc))
+            # Split into server-sized chunks.
+            for i in range(0, len(stale), BATCH_MAX_ITEMS):
+                chunk = stale[i:i + BATCH_MAX_ITEMS]
+                try:
+                    body = requests_json(
+                        self.session, self.host_name, self.base_url, "POST", "/batch",
+                        json={"items": chunk},
+                    )
+                except (ConnectionError, TimeoutError) as exc:
+                    return _fail_all(done, stale, urls, str(exc))
 
-            items = body.get("items")
-            if not isinstance(items, list):
-                return _fail_all(done, stale, urls, "unexpected server response")
+                items = body.get("items")
+                if not isinstance(items, list):
+                    return _fail_all(done, stale, urls, "unexpected server response")
 
-            for item in items:
-                result = _result_from_server(item, caches=self.caches, server_key=self.base_url)
-                done[result.url] = result
+                for item in items:
+                    result = _result_from_server(item, caches=self.caches, server_key=self.base_url)
+                    done[result.url] = result
 
         return _ordered_results(done, urls)
 
@@ -241,8 +244,6 @@ class Client:
         if not stale:
             return
 
-        pending: set[str] = {item["url"] for item in stale}
-
         try:
             import aiohttp
         except ImportError:
@@ -252,26 +253,30 @@ class Client:
             timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT)
             self._asession = aiohttp.ClientSession(timeout=timeout)
 
-        msg = ""
-        try:
-            async for result_data in aio_ndjson(
-                self._asession, self.host_name, self.base_url, "/batch",
-                json={"items": stale}, headers={"Accept": "application/x-ndjson"},
-            ):
-                item_url = result_data.get("url", "")
-                if not item_url or "status" not in result_data:
-                    continue
-                if result_data.get("status") != Status.INTERMEDIATE:
-                    pending.discard(item_url)
-                result = _result_from_server(
-                    result_data, caches=self.caches, server_key=self.base_url
-                )
-                yield result
-        except Exception as exc:
-            msg = str(exc) or type(exc).__name__
+        # Split into server-sized chunks.
+        for i in range(0, len(stale), BATCH_MAX_ITEMS):
+            chunk = stale[i:i + BATCH_MAX_ITEMS]
+            pending: set[str] = {item["url"] for item in chunk}
+            msg = ""
+            try:
+                async for result_data in aio_ndjson(
+                    self._asession, self.host_name, self.base_url, "/batch",
+                    json={"items": chunk}, headers={"Accept": "application/x-ndjson"},
+                ):
+                    item_url = result_data.get("url", "")
+                    if not item_url or "status" not in result_data:
+                        continue
+                    if result_data.get("status") != Status.INTERMEDIATE:
+                        pending.discard(item_url)
+                    result = _result_from_server(
+                        result_data, caches=self.caches, server_key=self.base_url
+                    )
+                    yield result
+            except Exception as exc:
+                msg = str(exc) or type(exc).__name__
 
-        for item_url in pending:
-            yield Result.client_fail(item_url, msg or "stream connection lost")
+            for item_url in pending:
+                yield Result.client_fail(item_url, msg or "stream connection lost")
 
     def reset_caches(self) -> None:
         """Reset all attached caches.

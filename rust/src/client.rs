@@ -11,6 +11,7 @@ use crate::types::*;
 const DEFAULT_BASE: &str = "https://cloud.thumbrella.dev";
 const HTTP_TIMEOUT_SECS: u64 = 12;
 const MAX_BACKOFF_SECS: u64 = 60;
+const BATCH_MAX_ITEMS: usize = 12;
 
 //  global backoff
 
@@ -72,18 +73,22 @@ fn parse_connect(connect: Option<&str>) -> ConnectConfig {
         .or_else(|| std::env::var("TBR_CONNECT").ok())
         .unwrap_or_else(|| DEFAULT_BASE.to_string());
 
-    // Bare value, no scheme. Dispatch to auth or handshake by prefix.
+    // Bare value, no scheme.  Only auth tokens are valid without a URL.
     if !raw.contains("://") {
-        let mut headers = HashMap::new();
         if is_auth_token(&raw) {
+            let mut headers = HashMap::new();
             headers.insert("Authorization".into(), format!("Bearer {raw}"));
-        } else {
-            headers.insert("x-tbr-handshake".into(), raw.to_string());
+            return ConnectConfig {
+                base_url: DEFAULT_BASE.into(),
+                host: host_from_url(DEFAULT_BASE).to_string(),
+                headers,
+            };
         }
+        // Bare non-auth values are not valid connect strings.
         return ConnectConfig {
             base_url: DEFAULT_BASE.into(),
             host: host_from_url(DEFAULT_BASE).to_string(),
-            headers,
+            headers: HashMap::new(),
         };
     }
 
@@ -311,50 +316,57 @@ impl Client {
         }
 
         if stale_items.is_empty() {
-            return Ok(urls.iter().map(|u| done.remove(*u).unwrap()).collect());
-        }
-
-        self.backoff.check(&self.host)?;
-
-        let body = serde_json::json!({ "items": stale_items });
-        let resp = match self.request("POST", "/batch")
-            .header("Accept", "application/json")
-            .json(&body)
-            .send()
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                return Ok(self.collect_results(urls, &done, |url| {
-                    let mut r = ResultData::new(url.to_string());
-                    r.set_client_error(&format!("server unreachable: {e}"));
-                    r
-                }));
-            }
-        };
-
-        let code = resp.status().as_u16();
-        self.backoff.record(&self.host, code == 429 || code == 503);
-
-        if !resp.status().is_success() {
             return Ok(self.collect_results(urls, &done, |url| {
                 let mut r = ResultData::new(url.to_string());
-                r.set_client_error(&format!("server returned {code}"));
+                r.set_client_error("no result");
                 r
             }));
         }
 
-        let batch: BatchResponse = resp.json().await.map_err(|e| {
-            Error::Http(code, e.to_string())
-        })?;
+        self.backoff.check(&self.host)?;
 
-        for item in batch.items {
-            if let Some(ref media) = item.media {
-                for cache in &self.caches {
-                    cache.put(media);
+        // Split into server-sized chunks.
+        for chunk in stale_items.chunks(BATCH_MAX_ITEMS) {
+            let body = serde_json::json!({ "items": chunk });
+            let resp = match self.request("POST", "/batch")
+                .header("Accept", "application/json")
+                .json(&body)
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    return Ok(self.collect_results(urls, &done, |url| {
+                        let mut r = ResultData::new(url.to_string());
+                        r.set_client_error(&format!("server unreachable: {e}"));
+                        r
+                    }));
                 }
+            };
+
+            let code = resp.status().as_u16();
+            self.backoff.record(&self.host, code == 429 || code == 503);
+
+            if !resp.status().is_success() {
+                return Ok(self.collect_results(urls, &done, |url| {
+                    let mut r = ResultData::new(url.to_string());
+                    r.set_client_error(&format!("server returned {code}"));
+                    r
+                }));
             }
-            done.insert(item.url.clone(), item);
+
+            let batch: BatchResponse = resp.json().await.map_err(|e| {
+                Error::Http(code, e.to_string())
+            })?;
+
+            for item in batch.items {
+                if let Some(ref media) = item.media {
+                    for cache in &self.caches {
+                        cache.put(media);
+                    }
+                }
+                done.insert(item.url.clone(), item);
+            }
         }
 
         Ok(self.collect_results(urls, &done, |url| {

@@ -9,6 +9,8 @@ HTTP_TIMEOUT = 12
 
 HTTP_BACKOFF_TICK = 0.3
 
+BATCH_MAX_ITEMS = 12
+
 
 class Status:
     """Result statuses.
@@ -25,6 +27,7 @@ class Status:
     FAILED = "failed"
     OVERLOADED = "overloaded"
     INTERMEDIATE = "intermediate"
+    BATCHLIMIT = "batchlimit"
     UNAVAILABLE = "unavailable"  # Only ever provided by the client
 
 

@@ -7,6 +7,8 @@ export const Status = {
   FAILED: "failed",
   OVERLOADED: "overloaded",
   INTERMEDIATE: "intermediate",
+  /** Server-side only: batch exceeded per-request item limit. */
+  BATCHLIMIT: "batchlimit",
   /** Client-side only, server was unreachable. */
   UNAVAILABLE: "unavailable",
 } as const;
