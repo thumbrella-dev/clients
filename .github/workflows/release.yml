@@ -1,0 +1,126 @@
+name: Release Clients
+
+# Publish client SDKs to their respective registries.
+#
+# Triggered manually or by pushing a version tag (v1.2.0).
+# The tag must already exist — version bumping is done locally by
+# platform/scripts/ci/prepare-release.py --scope clients.
+#
+# Attestation:
+#   npm:      --provenance (built-in Sigstore attestation)
+#   PyPI:     trusted publishing (OIDC token exchange)
+#   crates.io: actions/attest-build-provenance on the .crate file
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v1.2.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  # ---- derive version from the triggering ref or input ----------------------
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - name: Determine tag
+        id: tag
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Releasing tag=${TAG} version=${VERSION}"
+
+  # ---- npm: @thumbrella/client ----------------------------------------------
+  publish-npm:
+    needs: version
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: npm ci
+      - run: npm run build
+
+      # Smoke check: verify the package loads
+      - run: node -e "require('./dist/index.js'); console.log('OK')"
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # ---- PyPI: thumbrella-client ----------------------------------------------
+  publish-pypi:
+    needs: version
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install build
+
+      - name: Build package
+        run: python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # Trusted publishing (OIDC) — no token needed.
+        # Requires: PyPI project configured with a pending publisher
+        # pointing at this repo + workflow.
+
+  # ---- crates.io: thumbrella-client -----------------------------------------
+  publish-crates:
+    needs: version
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      # Package first so we can attest the .crate file before publishing.
+      - name: Package crate
+        run: cargo package --no-verify
+
+      - name: Attest crate
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            target/package/thumbrella-client-${{ needs.version.outputs.version }}.crate
+
+      - name: Publish to crates.io
+        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}

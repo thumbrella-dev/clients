@@ -5,15 +5,18 @@
  *
  * Re-exports core types alongside helpers for working with thumbnails
  * in the browser: class toggling, data-URI access, image creation,
- * IndexedDB caching, shared Client singleton, and global configuration.
+ * IndexedDB caching, shared Client singleton, global configuration,
+ * and the `<tbr-thumb>` custom element (`TbrThumb`, `tbrSetup`).
  *
- * For the one-tag custom-element setup see {@link ./element.ts}.
+ * `element.ts` has been merged into this module — `@thumbrella/client/browser`
+ * is the single browser entry point.  (`element.js` is still published as a
+ * byte-identical copy for one release to ease migration.)
  */
 
 import type { CacheBackend } from "./cache.js";
 import { createMemoryCache } from "./cache.js";
-import { Client, parseConnect } from "./api.js";
 import { Result, Media, EncodedJpeg, Status, Source, FileKind } from "./types.js";
+import { getClient, BatchedClient, getBatchedClient } from "./batched.js";
 
 // Re-exports — everything you need in the browser from one import
 
@@ -21,6 +24,7 @@ export { Client, parseConnect } from "./api.js";
 export { Result, Media, EncodedJpeg, Status, Source, FileKind } from "./types.js";
 export { createMemoryCache } from "./cache.js";
 export type { CacheBackend } from "./cache.js";
+export { getClient, BatchedClient, getBatchedClient };
 
 // Constants
 
@@ -117,205 +121,10 @@ export function resolveConnect(el: HTMLElement): string | undefined {
   return undefined;
 }
 
-// Shared client
-
-let _sharedClient: Client | null = null;
-
-/**
- * Get (or create) a shared Thumbrella {@link Client} for the page.
- *
- * @param connect  Optional connect string (falls back to `window.TBR_CONNECT`).
- */
-export function getClient(connect?: string): Client {
-  if (!_sharedClient) {
-    _sharedClient = new Client({
-      connect: connect ??
-        (typeof window !== "undefined"
-          ? (window as unknown as Record<string, string>).TBR_CONNECT
-          : undefined),
-    });
-  }
-  return _sharedClient;
-}
-
-// Batched client — coalesces individual URL requests into batch HTTP calls
-
-/**
- * Turn a push-based callback stream into an `AsyncGenerator`.
- *
- * Call `push()` for each value and `done()` when the stream ends.
- * The returned `iter` can be consumed with `for await … of`.
- */
-function createAsyncQueue<T>(): {
-  push: (item: T) => void;
-  done: () => void;
-  iter: AsyncIterableIterator<T>;
-} {
-  const buffer: T[] = [];
-  let waiter: ((v: IteratorResult<T>) => void) | null = null;
-  let finished = false;
-
-  const iter: AsyncIterableIterator<T> = {
-    [Symbol.asyncIterator]() {
-      return this;
-    },
-    async next(): Promise<IteratorResult<T>> {
-      if (buffer.length > 0) {
-        return { value: buffer.shift()!, done: false };
-      }
-      if (finished) {
-        return { value: undefined as unknown as T, done: true };
-      }
-      return new Promise((resolve) => {
-        waiter = resolve;
-      });
-    },
-    async return(
-      value?: T | undefined,
-    ): Promise<IteratorResult<T>> {
-      finished = true;
-      return { value: value as T, done: true };
-    },
-    async throw(
-      e?: unknown,
-    ): Promise<IteratorResult<T>> {
-      finished = true;
-      throw e;
-    },
-  };
-
-  return {
-    push(item: T) {
-      if (waiter) {
-        waiter({ value: item, done: false });
-        waiter = null;
-      } else {
-        buffer.push(item);
-      }
-    },
-    done() {
-      finished = true;
-      if (waiter) {
-        waiter({ value: undefined as unknown as T, done: true });
-        waiter = null;
-      }
-    },
-    iter,
-  };
-}
-
-/**
- * A {@link Client} wrapper that coalesces individual
- * {@link streamUrl} calls into batched HTTP requests.
- *
- * URLs submitted within the same microtask/macrotask boundary are
- * queued together and dispatched as a single `/batch` call.  Each
- * call site receives an independent `AsyncGenerator` that yields only
- * results for its own URL.
- *
- * ```ts
- * const bc = getBatchedClient("https://thumbrella.dev/api");
- * for await (const r of bc.streamUrl("https://example.com/a.jpg")) {
- *   console.log(r.status);
- * }
- * ```
- */
-export class BatchedClient {
-  readonly #client: Client;
-  #pending = new Map<
-    string,
-    ReturnType<typeof createAsyncQueue<Result>>
-  >();
-  #timer: ReturnType<typeof setTimeout> | null = null;
-
-  constructor(client: Client) {
-    this.#client = client;
-  }
-
-  /** The underlying (unbatched) {@link Client}. */
-  get client(): Client {
-    return this.#client;
-  }
-
-  /**
-   * Stream results for a single URL.
-   *
-   * The URL is queued internally.  When the flush timer fires all
-   * queued URLs are submitted together via {@link Client.stream}.
-   * Results are routed back to the per-URL async generator returned
-   * here.
-   */
-  streamUrl(url: string): AsyncIterableIterator<Result> {
-    const existing = this.#pending.get(url);
-    if (existing) return existing.iter;
-
-    const q = createAsyncQueue<Result>();
-    this.#pending.set(url, q);
-    this.#scheduleFlush();
-    return q.iter;
-  }
-
-  #scheduleFlush(): void {
-    if (this.#timer !== null) return;
-    this.#timer = setTimeout(() => this.#flush(), 0);
-  }
-
-  async #flush(): Promise<void> {
-    this.#timer = null;
-
-    const entries = [...this.#pending.entries()];
-    if (entries.length === 0) return;
-    this.#pending.clear();
-
-    const urlMap = new Map(entries);
-
-    try {
-      for await (const result of this.#client.stream(
-        entries.map(([u]) => u),
-      )) {
-        const q = urlMap.get(result.url);
-        if (!q) continue;
-        q.push(result);
-        if (result.status !== Status.INTERMEDIATE) {
-          q.done();
-        }
-      }
-    } catch {
-      for (const [url, q] of entries) {
-        q.push(Result.clientFail(url, "batch request failed"));
-        q.done();
-      }
-    }
-
-    // Safety net — ensure every queue is closed
-    for (const [, q] of entries) {
-      q.done();
-    }
-  }
-}
-
-// Singleton batched clients (keyed by connect string)
-
-const _batchedClients = new Map<string, BatchedClient>();
-
-/**
- * Get (or create) a shared {@link BatchedClient} for the page.
- *
- * Calls with the same `connect` return the same instance, so every
- * `<tbr-thumb>` element that shares a connect string also shares the
- * batching queue.
- *
- * @param connect  Optional connect string (falls back to `window.TBR_CONNECT`).
- */
-export function getBatchedClient(connect?: string): BatchedClient {
-  const key = connect || "__default__";
-  let bc = _batchedClients.get(key);
-  if (!bc) {
-    bc = new BatchedClient(getClient(connect));
-    _batchedClients.set(key, bc);
-  }
-  return bc;
-}
+// Shared client + batched client (`getClient`, `BatchedClient`,
+// `getBatchedClient`) live in batched.ts — they are Node-safe and are also
+// re-exported by the root entry, so they must not depend on this module.
+// Re-exported at the top of this file.
 
 // Markup & classes
 
@@ -563,4 +372,414 @@ function createIndexedDbCache(maxMb: number): CacheBackend {
       } catch { /* best-effort */ }
     },
   };
+}
+
+//
+// `<tbr-thumb>` custom element
+//
+// Previously a separate module (element.ts / element.js).  It now lives here
+// so `@thumbrella/client/browser` is the single browser entry point.  The
+// old `element.js` entry is published as a byte-identical copy of `browser.js`
+// for one release to ease migration.
+
+// Module state
+
+const _blobCache = new Map<number, string>();
+
+let _booted = false;
+
+// Constructable stylesheet.  Created under a typeof guard so this module stays
+// importable in Node — browser.ts is re-exported by the root entry (index.ts),
+// which must not touch DOM globals on import.
+const styles: CSSStyleSheet | null =
+  typeof CSSStyleSheet !== "undefined" ? new CSSStyleSheet() : null;
+styles?.replaceSync(`
+  :host {
+    display: inline-block;
+    position: relative;
+    overflow: hidden;
+    background: var(--tbr-bg, #0d1225);
+    width: 250px;
+    aspect-ratio: 5 / 4;
+  }
+  :host([hidden]) { display: none; }
+
+  .tbr-placeholder {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    z-index: 1;
+    transition: opacity 0.25s ease;
+  }
+
+  .tbr-final {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    z-index: 3;
+    opacity: 0;
+    transition: opacity 0.35s ease;
+  }
+
+  :host(.tbr-loaded) .tbr-final {
+    opacity: 1;
+  }
+
+  /* Shimmer skeleton */
+
+  :host(.tbr-requested) .tbr-placeholder,
+  :host(.tbr-intermediate) .tbr-placeholder {
+    animation: tbr-shimmer 2s ease-in-out infinite;
+  }
+
+  .tbr-shimmer {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+    background: linear-gradient(
+      105deg,
+      var(--tbr-shimmer, rgba(255, 255, 255, 0.03)) 40%,
+      rgba(255, 255, 255, 0.09) 50%,
+      var(--tbr-shimmer, rgba(255, 255, 255, 0.03)) 60%
+    );
+    background-size: 200% 100%;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+
+  :host(.tbr-requested) .tbr-shimmer,
+  :host(.tbr-intermediate) .tbr-shimmer {
+    opacity: 1;
+    animation: tbr-sweep 2.2s ease-in-out infinite;
+  }
+
+  :host(.tbr-loaded) .tbr-shimmer {
+    opacity: 0;
+  }
+
+  :host(.tbr-has-intermediate) .tbr-shimmer {
+    opacity: 0;
+  }
+
+  :host(.tbr-has-intermediate) .tbr-placeholder {
+    animation: none;
+  }
+
+  :host(.tbr-loaded) .tbr-placeholder {
+    opacity: 0;
+  }
+
+  /* Spinner */
+
+  .tbr-spinner {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+    z-index: 4;
+  }
+
+  .tbr-spinner::after {
+    content: "";
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255, 255, 255, 0.15);
+    border-top-color: var(--tbr-spinner-color, #7c5cff);
+    border-radius: 50%;
+    animation: tbr-spin 0.8s linear infinite;
+  }
+
+  :host(.tbr-requested) .tbr-spinner,
+  :host(.tbr-intermediate) .tbr-spinner {
+    opacity: 1;
+  }
+
+  :host(.tbr-loaded) .tbr-spinner {
+    opacity: 0;
+  }
+
+  /* Keyframes */
+
+  @keyframes tbr-shimmer {
+    0%, 100% { filter: brightness(1); }
+    50%      { filter: brightness(1.12); }
+  }
+
+  @keyframes tbr-sweep {
+    0%   { background-position: -100% 0; }
+    100% { background-position: 200% 0; }
+  }
+
+  @keyframes tbr-spin {
+    to { transform: rotate(360deg); }
+  }
+`);
+
+// Guard the class base so `extends HTMLElement` isn't evaluated when this
+// module is imported in a non-browser environment (Node/SSR/tests).  In a
+// browser `_TbrBase` is `HTMLElement`; elsewhere it's a plain empty class
+// (never constructed — `TbrThumb` is browser-only).
+const _TbrBase =
+  typeof HTMLElement !== "undefined"
+    ? HTMLElement
+    : (class {} as typeof HTMLElement);
+
+/**
+ * `<tbr-thumb>` — a self-contained thumbnail element.
+ *
+ * Uses Shadow DOM for style encapsulation. Automatically requests a
+ * thumbnail from the configured Thumbrella server when its `src` attribute
+ * is set or changed.
+ *
+ * Fires a `tbr:loaded` custom event when the thumbnail arrives (success or
+ * failure).  The event bubbles and is composed, so it crosses shadow-DOM
+ * boundaries.
+ *
+ * Usage:
+ * ```html
+ * <tbr-thumb
+ *   src="https://example.com/model.glb"
+ *   connect="https://thumbrella.dev/api"
+ *   style="width: 200px;">
+ * </tbr-thumb>
+ * ```
+ */
+export class TbrThumb extends _TbrBase {
+  static observedAttributes = ["src", "connect", "lazy"];
+
+  #shadow: ShadowRoot;
+  #placeholderImg!: HTMLImageElement;
+  #finalImg!: HTMLImageElement;
+  #loaded = false;
+  #pending = false;
+  #url: string | null = null;
+
+  constructor() {
+    super();
+    this.#shadow = this.attachShadow({ mode: "open" });
+    this.#shadow.adoptedStyleSheets = styles ? [styles] : [];
+  }
+
+  connectedCallback(): void {
+    this.#render();
+    this.#load();
+  }
+
+  attributeChangedCallback(name: string, _old: string | null, newVal: string | null): void {
+    if (name === "src" && newVal !== null && newVal !== this.#url) {
+      this.#url = newVal;
+      this.#loaded = false;
+      this.#pending = false;
+      this.classList.remove(
+        "tbr-loaded", "tbr-requested", "tbr-intermediate",
+        "tbr-has-intermediate", "tbr-success", "tbr-failed",
+        "tbr-overloaded", "tbr-unavailable",
+      );
+      this.#render();
+      this.#load();
+    }
+    if (name === "connect") {
+      if (this.#pending) {
+        this.#pending = false;
+      }
+      this.#load();
+    }
+  }
+
+  // Internal DOM
+
+  #render(): void {
+    const name = this.getAttribute("alt") || this.#url || "";
+    const escaped = name.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+
+    this.#shadow.innerHTML = `
+      <img class="tbr-placeholder" src="${PLACEHOLDER_SVG}" alt="${escaped}" loading="lazy" decoding="async" />
+      <img class="tbr-final" src="${CLEAR_PIXEL}" alt="" loading="lazy" decoding="async" />
+      <div class="tbr-shimmer" aria-hidden="true"></div>
+      <div class="tbr-spinner" aria-hidden="true"></div>
+    `;
+
+    this.#placeholderImg = this.#shadow.querySelector(".tbr-placeholder")!;
+    this.#finalImg = this.#shadow.querySelector(".tbr-final")!;
+  }
+
+  // Loading
+
+  async #load(): Promise<void> {
+    if (!this.isConnected || !this.#url || this.#loaded || this.#pending) return;
+    this.#pending = true;
+
+    const connect = resolveConnect(this);
+    const batched = getBatchedClient(connect);
+
+    this.classList.add("tbr-requested");
+
+    try {
+      for await (const result of batched.streamUrl(this.#url)) {
+        if (result.status === Status.INTERMEDIATE) {
+          this.classList.add("tbr-intermediate");
+          this.#applyIntermediate(result);
+          continue;
+        }
+
+        this.#applyResult(result);
+      }
+    } catch {
+      this.#applyResult(Result.clientFail(this.#url!, "server unreachable"));
+    }
+
+    this.#pending = false;
+  }
+
+  #applyIntermediate(result: Result): void {
+    const thumb = result.media?.thumbnail;
+    if (!thumb) return;
+    const isPlaceholder = !!result.media?.placeholder;
+    const blobUrl = isPlaceholder
+      ? cachedBlobUrl(thumb.key, thumb.bytes)
+      : URL.createObjectURL(new Blob([thumb.bytes as BlobPart], { type: "image/jpeg" }));
+    this.#placeholderImg.src = blobUrl;
+    this.classList.add("tbr-has-intermediate");
+  }
+
+  #applyResult(result: Result): void {
+    this.classList.remove("tbr-requested");
+    this.classList.add("tbr-loaded", "tbr-" + result.status.toLowerCase());
+    this.#loaded = true;
+
+    const thumb = result.media?.thumbnail;
+    if (thumb) {
+      const { bytes, key } = thumb;
+      const isPlaceholder = !!result.media?.placeholder;
+      const blobUrl = isPlaceholder
+        ? cachedBlobUrl(key, bytes)
+        : URL.createObjectURL(new Blob([bytes as BlobPart], { type: "image/jpeg" }));
+      this.#finalImg.src = blobUrl;
+    }
+
+    this.dispatchEvent(
+      new CustomEvent("tbr:loaded", {
+        bubbles: true,
+        composed: true,
+        detail: { result },
+      }),
+    );
+  }
+
+  // Connect resolution
+
+  #resolveConnect(): string | undefined {
+    return resolveConnect(this);
+  }
+}
+
+/** Configuration for {@link tbrSetup} (full form — use when you need `persist`). */
+export interface SetupConfig {
+  connect?: string;
+  persist?: number | boolean;
+}
+
+/**
+ * Activate Thumbrella on the current page.
+ *
+ * Registers `<tbr-thumb>`, configures global defaults, and injects CSS for
+ * styles.  Call once — subsequent calls are no-ops.
+ *
+ * The common case is a connect string:
+ * ```ts
+ * import { tbrSetup } from "@thumbrella/client/browser";
+ * tbrSetup("https://thumbrella.dev/api");
+ * ```
+ *
+ * For IndexedDB persistence, pass a config object instead:
+ * ```ts
+ * tbrSetup({ connect: "https://thumbrella.dev/api", persist: 10 });
+ * ```
+ *
+ * With no arguments, reads `data-tbr-connect` and `data-tbr-persist` from
+ * the loading `<script>` tag if present.
+ */
+export function tbrSetup(connectOrOpts?: string | SetupConfig): void {
+  if (_booted || typeof document === "undefined") return;
+  _booted = true;
+
+  const scriptDs = findScript()?.dataset ?? {};
+
+  // Resolve connect: explicit string > opts.connect > script attribute > undefined
+  const explicitConnect = typeof connectOrOpts === "string"
+    ? connectOrOpts
+    : connectOrOpts?.connect ?? scriptDs.tbrConnect;
+
+  if (explicitConnect && typeof window !== "undefined") {
+    (window as unknown as Record<string, string>).TBR_CONNECT = explicitConnect;
+  }
+
+  if (typeof customElements !== "undefined") {
+    customElements.define("tbr-thumb", TbrThumb);
+  }
+
+  injectStyles();
+}
+
+//
+// Internal helpers
+//
+
+function cachedBlobUrl(key: number, bytes: Uint8Array): string {
+  const existing = _blobCache.get(key);
+  if (existing) return existing;
+  const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "image/jpeg" }));
+  _blobCache.set(key, url);
+  return url;
+}
+
+function findScript(): HTMLScriptElement | null {
+  if (typeof document === "undefined") return null;
+  if (document.currentScript) return document.currentScript as HTMLScriptElement;
+  return document.querySelector<HTMLScriptElement>("script[data-tbr-connect]");
+}
+
+function injectStyles(): void {
+  if (typeof document === "undefined") return;
+  const id = "tbr-light-dom-styles";
+  if (document.getElementById(id)) return;
+
+  const style = document.createElement("style");
+  style.id = id;
+  // language=CSS
+  style.textContent = `
+.tbr-kit {
+  display: block;
+  position: relative;
+  overflow: hidden;
+  background: var(--tbr-bg, #0d1225);
+  width: 250px;
+  aspect-ratio: 5 / 4;
+}
+.tbr-kit img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.tbr-placeholder { z-index: 1; }
+.tbr-final { z-index: 3; opacity: 0; transition: opacity 0.35s ease; }
+.tbr-loaded .tbr-final { opacity: 1; }
+.tbr-loaded .tbr-placeholder { opacity: 0; }`;
+
+  document.head.appendChild(style);
 }

@@ -1,12 +1,11 @@
 {
   "name": "@thumbrella/client",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "TypeScript client for the Thumbrella thumbnail API - typed results, streaming batches, pluggable caching",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "browser": "dist/element.js",
-  "jsdelivr": "element.js",
+  "jsdelivr": "browser.js",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

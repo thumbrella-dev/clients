@@ -3,11 +3,15 @@
  * bundle.ts — esbuild bundler for self-contained CDN entry points.
  *
  * Reads the package version, builds a banner, then bundles
- * src/element.ts → element.js  and  src/browser.ts → browser.js.
+ * src/browser.ts → browser.js.
+ *
+ * element.js is published as a byte-identical copy of browser.js for one
+ * release so existing CDN / <script> users of `@thumbrella/client/element.js`
+ * have time to migrate.  Remove the copy step in a future release.
  */
 
 import * as esbuild from "esbuild";
-import { readFileSync } from "node:fs";
+import { copyFileSync, readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -38,6 +42,13 @@ async function bundle(entry: string, outfile: string) {
 }
 
 console.log(`Bundling @thumbrella/client v${version}…`);
-await bundle("src/element.ts", "element.js");
+
 await bundle("src/browser.ts", "browser.js");
+
+// Legacy duplicate: element.js ships the same bundle as browser.js so
+// users of `@thumbrella/client/element.js` keep working during the
+// transition.  Remove this copy in a future release.
+copyFileSync(resolve(root, "browser.js"), resolve(root, "element.js"));
+console.log("  element.js  (copy of browser.js)");
+
 console.log("Done.");

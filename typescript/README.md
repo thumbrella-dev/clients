@@ -51,7 +51,7 @@ for await (const r of tbr.stream(media_urls)) {
 
 ```html
 <script type="module">
-  import { tbrSetup } from "@thumbrella/client/element.js";
+  import { tbrSetup } from "@thumbrella/client/browser";
   tbrSetup("https://demo.thumbrella.dev");
 </script>
 
@@ -67,11 +67,18 @@ spinner, placeholders, failures, caching, and lazy loading.
 | Import                               | Contents                                     |
 |--------------------------------------|----------------------------------------------|
 | `@thumbrella/client`                 | `Client`, `Result`, `Media`, `EncodedJpeg`, types |
-| `@thumbrella/client/element.js`      | `<tbr-thumb>` custom element, `tbrSetup()`   |
-| `@thumbrella/client/browser.js`      | lighter weight browser functions             |
+| `@thumbrella/client/browser`         | browser helpers + `<tbr-thumb>` element, `tbrSetup()` |
+| `@thumbrella/client/element`         | deprecated alias of `browser` (transition only) |
 
-Node users only import from the root.  Browser users import from `element.js`
-or `browser.js`.
+Node users only import from the root.  Browser users import from `browser` —
+the old `element` entry still works, but it's deprecated and will be removed
+in a future release.
+
+> **Migration:** `element.js` has been merged into `browser.js`.  If you
+> imported `@thumbrella/client/element.js` (or referenced the CDN file
+> `element.js`), switch to `@thumbrella/client/browser` / `browser.js`.
+> For this release the `element` entry ships as a byte-identical duplicate
+> so existing imports keep working.
 
 ### Where to Run It
 
