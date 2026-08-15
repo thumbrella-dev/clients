@@ -1,5 +1,6 @@
 import type { Cache } from "./cache.js";
 import { MemoryCache, putAllCaches } from "./cache.js";
+import { CLIENT_MAJOR_MINOR } from "./version.js";
 import {
   Result,
   Media,
@@ -93,7 +94,10 @@ export class Client {
 
     const cfg = parseConnect(opts.connect);
     this.baseUrl = cfg.baseUrl;
-    this.headers = { "User-Agent": "thumbrella-ts/0.1", ...cfg.headers };
+    this.headers = {
+      "User-Agent": `thumbrella-ts/${CLIENT_MAJOR_MINOR}`,
+      ...cfg.headers,
+    };
     this.caches = opts.caches === undefined
       ? [new MemoryCache()]
       : opts?.caches ?? [];

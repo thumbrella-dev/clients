@@ -21,6 +21,18 @@ const root = resolve(__dirname, "..");
 const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf-8"));
 const version: string = pkg.version;
 
+// The User-Agent string reports only major.minor (no patch). Fail the build
+// if src/version.ts has drifted from the version in package.json.
+const versionMajorMinor = version.split(".").slice(0, 2).join(".");
+const versionSource = readFileSync(resolve(root, "src/version.ts"), "utf-8");
+const versionMatch = versionSource.match(/CLIENT_MAJOR_MINOR\s*=\s*"([^"]+)"/);
+if (!versionMatch || versionMatch[1] !== versionMajorMinor) {
+  throw new Error(
+    `src/version.ts CLIENT_MAJOR_MINOR is out of sync with package.json ` +
+    `version ${version}. Set it to "${versionMajorMinor}" before releasing.`,
+  );
+}
+
 const banner = `/*!
  * @thumbrella/client  v${version}
  * Bundled from TypeScript sources — DO NOT EDIT

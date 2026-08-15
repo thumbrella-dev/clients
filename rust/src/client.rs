@@ -167,7 +167,14 @@ impl Client {
         let mut default_headers = reqwest::header::HeaderMap::new();
         default_headers.insert(
             reqwest::header::USER_AGENT,
-            "thumbrella-client/0.1".parse().unwrap(),
+            concat!(
+                "thumbrella-rust/",
+                env!("CARGO_PKG_VERSION_MAJOR"),
+                ".",
+                env!("CARGO_PKG_VERSION_MINOR"),
+            )
+            .parse()
+            .unwrap(),
         );
         for (k, v) in &cfg.headers {
             if let (Ok(name), Ok(val)) = (

@@ -251,7 +251,10 @@ class Client:
 
         if self._asession is None:
             timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT)
-            self._asession = aiohttp.ClientSession(timeout=timeout)
+            self._asession = aiohttp.ClientSession(
+                timeout=timeout,
+                headers={"User-Agent": _client_user_agent()},
+            )
 
         # Split into server-sized chunks.
         for i in range(0, len(stale), BATCH_MAX_ITEMS):
@@ -306,13 +309,19 @@ class Client:
         await self.close()
 
 
+def _major_minor(version: str) -> str:
+    """Reduce a full version string to its major.minor components."""
+    parts = version.split(".")
+    return ".".join(parts[:2]) if len(parts) >= 2 else version
+
+
 def _client_user_agent() -> str:
     """Build a User-Agent string from the installed package version."""
     try:
         ver = importlib.metadata.version("thumbrella-client")
     except Exception:
         ver = "dev"
-    return f"thumbrella-python/{ver}"
+    return f"thumbrella-python/{_major_minor(ver)}"
 
 
 # Per-server placeholder thumbnail cache, permanent, keyed by connect string.
