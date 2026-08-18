@@ -2,13 +2,17 @@ name: Release Clients
 
 # Publish client SDKs to their respective registries.
 #
-# Triggered manually or by pushing a version tag (v1.2.0).
+# Manual trigger only (workflow_dispatch). There is intentionally no push/tag
+# trigger, so pushing a tag never starts a release. Only users with write
+# access can run this workflow, and each publish job runs in a protected
+# GitHub environment with a required reviewer.
+#
 # The tag must already exist — version bumping is done locally by
 # platform/scripts/ci/prepare-release.py --scope clients.
 #
-# Attestation:
-#   npm:      --provenance (built-in Sigstore attestation)
-#   PyPI:     trusted publishing (OIDC token exchange)
+# Attestation and auth:
+#   npm:       trusted publishing (OIDC) + --provenance
+#   PyPI:      trusted publishing (OIDC token exchange)
 #   crates.io: actions/attest-build-provenance on the .crate file
 
 on:
@@ -22,7 +26,10 @@ on:
 permissions:
   contents: read
   id-token: write
-  attestations: write
+
+concurrency:
+  group: release-clients-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   # ---- derive version from the triggering ref or input ----------------------
@@ -36,6 +43,11 @@ jobs:
         id: tag
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          # Reject malformed or unexpected tags before anything is published.
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]] || {
+            echo "tag must look like v1.2.0 or v1.2.0-rc.1 (got: $TAG)" >&2
+            exit 1
+          }
           VERSION="${TAG#v}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
@@ -45,6 +57,7 @@ jobs:
   publish-npm:
     needs: version
     runs-on: ubuntu-latest
+    environment: npm
     defaults:
       run:
         working-directory: typescript
@@ -53,7 +66,7 @@ jobs:
         with:
           ref: ${{ needs.version.outputs.tag }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
@@ -64,15 +77,17 @@ jobs:
       # Smoke check: verify the package loads
       - run: node -e "require('./dist/index.js'); console.log('OK')"
 
+      # Trusted publishing (OIDC) — no npm token stored in the repo.
+      # Requires: @thumbrella/client configured with a trusted publisher
+      # pointing at this repo + workflow (environment "npm").
       - name: Publish to npm
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   # ---- PyPI: thumbrella-client ----------------------------------------------
   publish-pypi:
     needs: version
     runs-on: ubuntu-latest
+    environment: pypi
     defaults:
       run:
         working-directory: python
@@ -100,6 +115,11 @@ jobs:
   publish-crates:
     needs: version
     runs-on: ubuntu-latest
+    environment: crates
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     defaults:
       run:
         working-directory: rust
@@ -122,5 +142,8 @@ jobs:
           subject-path: |
             target/package/thumbrella-client-${{ needs.version.outputs.version }}.crate
 
+      # crates.io has no trusted publishing yet; the token lives in the
+      # "crates" environment and should be scoped to this one crate with
+      # publish-only access.
       - name: Publish to crates.io
         run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
