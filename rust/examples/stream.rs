@@ -1,13 +1,12 @@
-//! stream.rs  show progress on thumbnail rendering (batch mode).
-//!
-//! Note: true NDJSON streaming is not yet implemented in the Rust client.
-//! This example uses `batch()` instead, which waits for all results.
+//! stream.rs  show progress on thumbnail rendering (streaming mode).
 //!
 //! Usage:
 //!     cargo run --example stream https://www.python.org/static/img/python-logo.png https://docs.github.com/en/get-started
 
 use std::env;
 use std::time::Instant;
+
+use futures_util::{StreamExt, pin_mut};
 use thumbrella_client::Client;
 
 #[tokio::main]
@@ -31,26 +30,20 @@ async fn main() {
     }
 
     let start = Instant::now();
-    match tbr.batch(&urls).await {
-        Ok(results) => {
-            for result in &results {
-                let elapsed = start.elapsed().as_millis();
-                let kind = result.media.as_ref()
-                    .map(|m| format!("{}({})", m.kind, m.extension))
-                    .unwrap_or_else(|| "<nomedia>".to_string());
-                println!(
-                    "{elapsed}ms {} - {} {} {} {}",
-                    result.url.split('/').next_back().unwrap_or(&result.url),
-                    result.status,
-                    kind,
-                    result.source.as_deref().unwrap_or(""),
-                    result.message.as_deref().unwrap_or(""),
-                );
-            }
-        }
-        Err(e) => {
-            eprintln!("stream error: {e}");
-            std::process::exit(1);
-        }
+    let stream = tbr.stream(&urls);
+    pin_mut!(stream);
+    while let Some(result) = stream.next().await {
+        let elapsed = start.elapsed().as_millis();
+        let kind = result.media.as_ref()
+            .map(|m| format!("{}({})", m.kind, m.extension))
+            .unwrap_or_else(|| "<nomedia>".to_string());
+        println!(
+            "{elapsed}ms {} - {} {} {} {}",
+            result.url.split('/').next_back().unwrap_or(&result.url),
+            result.status,
+            kind,
+            result.source.as_deref().unwrap_or(""),
+            result.message.as_deref().unwrap_or(""),
+        );
     }
 }

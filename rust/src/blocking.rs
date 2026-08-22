@@ -30,8 +30,9 @@ impl Client {
         self.rt.block_on(self.inner.batch(urls))
     }
 
-    pub fn stream(&self, _urls: &[&str]) -> Result<Vec<ResultData>, Error> {
-        todo!("NDJSON streaming not yet implemented; use `batch()` instead")
+    pub fn stream(&self, urls: &[&str]) -> Result<Vec<ResultData>, Error> {
+        use futures_util::StreamExt;
+        Ok(self.rt.block_on(async { self.inner.stream(urls).collect::<Vec<_>>().await }))
     }
 
     pub fn base_url(&self) -> &str {

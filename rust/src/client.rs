@@ -1,7 +1,10 @@
 //! Async Thumbrella client.
 
+use async_stream::stream;
+use futures_core::Stream;
+use futures_util::StreamExt;
 use reqwest::Client as HttpClient;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -151,6 +154,7 @@ pub struct Client {
     base_url: String,
     host: String,
     http: HttpClient,
+    stream_http: HttpClient,
     caches: Vec<Box<dyn Cache>>,
     backoff: Backoff,
 }
@@ -189,10 +193,16 @@ impl Client {
             base_url: cfg.base_url,
             host: cfg.host,
             http: HttpClient::builder()
-                .default_headers(default_headers)
+                .default_headers(default_headers.clone())
                 .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
                 .build()
                 .expect("reqwest client"),
+            stream_http: HttpClient::builder()
+                .default_headers(default_headers)
+                .connect_timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
+                .read_timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
+                .build()
+                .expect("reqwest stream client"),
             caches,
             backoff: Backoff::new(),
         }
@@ -283,44 +293,7 @@ impl Client {
     ///
     /// See <https://thumbrella.dev/docs/api/batch.html> for server details.
     pub async fn batch(&self, urls: &[&str]) -> Result<Vec<ResultData>, Error> {
-        let mut done: HashMap<String, ResultData> = HashMap::new();
-        let mut stale_items: Vec<serde_json::Value> = Vec::new();
-
-        for &url in urls {
-            if !url.contains("://") {
-                let mut r = ResultData::new(url.to_string());
-                r.set_client_error("invalid URL");
-                done.insert(url.to_string(), r);
-                continue;
-            }
-
-            // Check caches for a fresh entry.
-            let mut fresh = false;
-            for cache in &self.caches {
-                if let Some(cached) = cache.get(url)
-                    && cached.is_fresh() {
-                        let mut r = ResultData::new(url.to_string());
-                        r.status = status::SUCCESS.to_string();
-                        r.source = Some(source::CACHE.to_string());
-                        r.media = Some(cached.clone());
-                        done.insert(url.to_string(), r);
-                        fresh = true;
-                        break;
-                    }
-            }
-            if fresh {
-                continue;
-            }
-
-            let mut item = serde_json::json!({ "url": url });
-            for cache in &self.caches {
-                if let Some(cached) = cache.get(url) && !cached.cache.is_empty() {
-                    item["cache"] = serde_json::Value::String(cached.cache.clone());
-                    break;
-                }
-            }
-            stale_items.push(item);
-        }
+        let (mut done, stale_items) = self.preflight(urls);
 
         if stale_items.is_empty() {
             return Ok(self.collect_results(urls, &done, |url| {
@@ -385,12 +358,143 @@ impl Client {
 
     /// Stream thumbnail results as they complete.
     ///
-    /// Use [`batch`](Self::batch) for now, which provides the same results
-    /// synchronously once all thumbnails complete.
+    /// Yields [`ResultData`] values as the server produces them, so callers can
+    /// show placeholders and intermediate results while slower thumbnails are
+    /// still rendering. Every URL will receive at least one result, on success
+    /// or failure. Some media also receive intermediate results while they are
+    /// being processed, which can be detected by checking
+    /// `result.status == status::INTERMEDIATE`.
     ///
-    /// See <https://thumbrella.dev/docs/api/batch.html> for server details.
-    pub async fn stream(&self, _urls: &[&str]) -> Result<Vec<ResultData>, Error> {
-        todo!("NDJSON streaming not yet implemented; use `batch()` instead")
+    /// Individual failures are reported as results with a failure status, never
+    /// as stream errors. URLs are automatically split into server-sized chunks
+    /// to respect the server's per-request item limit.
+    ///
+    /// The returned stream borrows the client and the URL slice, so both must
+    /// outlive the stream.
+    ///
+    /// ```no_run
+    /// # async fn example() -> Result<(), thumbrella_client::Error> {
+    /// # use futures_util::{pin_mut, StreamExt};
+    /// let tbr = thumbrella_client::Client::new(None);
+    /// let urls = ["https://example.com/a.jpg", "https://example.com/b.png"];
+    /// let stream = tbr.stream(&urls);
+    /// pin_mut!(stream);
+    /// while let Some(result) = stream.next().await {
+    ///     println!("{} {}", result.url, result.status);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn stream<'a, 'u>(
+        &'a self,
+        urls: &'u [&'u str],
+    ) -> impl Stream<Item = ResultData> + 'u
+    where
+        'a: 'u,
+    {
+        stream! {
+            let urls: Vec<String> = urls.iter().map(|s| s.to_string()).collect();
+            let url_refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+            let (done, stale) = self.preflight(&url_refs);
+
+            // Resolved (cached or invalid) results first, in input order.
+            for url in &urls {
+                if let Some(r) = done.get(url) {
+                    yield r.clone();
+                }
+            }
+
+            if stale.is_empty() {
+                // nothing left to do
+            } else if let Err(e) = self.backoff.check(&self.host) {
+                for item in &stale {
+                    let url = item["url"].as_str().unwrap_or("").to_string();
+                    let mut r = ResultData::new(url);
+                    r.set_client_error(&e.to_string());
+                    yield r;
+                }
+            } else {
+                for chunk in stale.chunks(BATCH_MAX_ITEMS) {
+                    let mut pending: HashSet<String> = chunk
+                        .iter()
+                        .map(|item| item["url"].as_str().unwrap_or("").to_string())
+                        .collect();
+
+                    let body = serde_json::json!({ "items": chunk });
+                    let resp = match self.stream_request("POST", "/batch")
+                        .header("Accept", "application/x-ndjson")
+                        .json(&body)
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => {
+                            for url in pending.drain() {
+                                let mut r = ResultData::new(url);
+                                r.set_client_error(&format!("server unreachable: {e}"));
+                                yield r;
+                            }
+                            continue;
+                        }
+                    };
+
+                    let code = resp.status().as_u16();
+                    self.backoff.record(&self.host, code == 429 || code == 503);
+
+                    if !resp.status().is_success() {
+                        for url in pending.drain() {
+                            let mut r = ResultData::new(url);
+                            r.set_client_error(&format!("server returned {code}"));
+                            yield r;
+                        }
+                        continue;
+                    }
+
+                    // Read the NDJSON response body incrementally, yielding
+                    // each result as its line arrives.
+                    let mut buf: Vec<u8> = Vec::new();
+                    let mut body_stream = resp.bytes_stream();
+                    loop {
+                        let chunk = match StreamExt::next(&mut body_stream).await {
+                            Some(Ok(c)) => c,
+                            Some(Err(_)) | None => break,
+                        };
+                        buf.extend_from_slice(&chunk);
+                        while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+                            let line: Vec<u8> = buf.drain(..=pos).collect();
+                            let text = String::from_utf8_lossy(&line);
+                            let text = text.trim();
+                            if text.is_empty() {
+                                continue;
+                            }
+                            if let Ok(result) = serde_json::from_str::<ResultData>(text)
+                                && let Some(r) = self.finish_stream_result(result, &mut pending) {
+                                    yield r;
+                            }
+                        }
+                    }
+
+                    // Flush any trailing line without a final newline.
+                    if !buf.is_empty() {
+                        let text = String::from_utf8_lossy(&buf);
+                        let text = text.trim();
+                        if !text.is_empty()
+                            && let Ok(result) = serde_json::from_str::<ResultData>(text)
+                            && let Some(r) = self.finish_stream_result(result, &mut pending) {
+                                yield r;
+                        }
+                    }
+
+                    // Anything still pending never completed; the connection
+                    // was interrupted before the server sent its result.
+                    for url in pending.drain() {
+                        let mut r = ResultData::new(url);
+                        r.set_client_error("stream connection lost");
+                        yield r;
+                    }
+                }
+            }
+        }
     }
 
     //  helpers 
@@ -409,13 +513,104 @@ impl Client {
             .collect()
     }
 
-    /// Low-level HTTP request builder.
+    /// Check caches and validate URLs, without making any server calls.
+    ///
+    /// Returns `(done, stale)`: `done` maps each URL resolved locally (invalid
+    /// URL or fresh cache entry) to its result, and `stale` holds the request
+    /// items that still need a server call.
+    fn preflight(
+        &self,
+        urls: &[&str],
+    ) -> (HashMap<String, ResultData>, Vec<serde_json::Value>) {
+        let mut done: HashMap<String, ResultData> = HashMap::new();
+        let mut stale_items: Vec<serde_json::Value> = Vec::new();
+
+        for &url in urls {
+            if !url.contains("://") {
+                let mut r = ResultData::new(url.to_string());
+                r.set_client_error("invalid URL");
+                done.insert(url.to_string(), r);
+                continue;
+            }
+
+            // Check caches for a fresh entry.
+            let mut fresh = false;
+            for cache in &self.caches {
+                if let Some(cached) = cache.get(url)
+                    && cached.is_fresh() {
+                        let mut r = ResultData::new(url.to_string());
+                        r.status = status::SUCCESS.to_string();
+                        r.source = Some(source::CACHE.to_string());
+                        r.media = Some(cached.clone());
+                        done.insert(url.to_string(), r);
+                        fresh = true;
+                        break;
+                    }
+            }
+            if fresh {
+                continue;
+            }
+
+            let mut item = serde_json::json!({ "url": url });
+            for cache in &self.caches {
+                if let Some(cached) = cache.get(url) && !cached.cache.is_empty() {
+                    item["cache"] = serde_json::Value::String(cached.cache.clone());
+                    break;
+                }
+            }
+            stale_items.push(item);
+        }
+
+        (done, stale_items)
+    }
+
+    /// Finalize a single result parsed from an NDJSON stream line.
+    ///
+    /// Drops intermediate results out of `pending` tracking, stores any media
+    /// in the attached caches, and returns the result to yield.
+    fn finish_stream_result(
+        &self,
+        result: ResultData,
+        pending: &mut HashSet<String>,
+    ) -> Option<ResultData> {
+        if result.url.is_empty() {
+            return None;
+        }
+        if result.status != status::INTERMEDIATE {
+            pending.remove(&result.url);
+        }
+        if let Some(ref media) = result.media {
+            for cache in &self.caches {
+                cache.put(media);
+            }
+        }
+        Some(result)
+    }
+
+    fn build_request(
+        &self,
+        client: &HttpClient,
+        method: &str,
+        path: &str,
+    ) -> reqwest::RequestBuilder {
+        let url = format!("{}{path}", self.base_url);
+        client.request(method.parse().unwrap(), &url)
+    }
+
+    /// Low-level HTTP request builder (bounded total timeout).
     pub fn request(
         &self,
         method: &str,
         path: &str,
     ) -> reqwest::RequestBuilder {
-        let url = format!("{}{path}", self.base_url);
-        self.http.request(method.parse().unwrap(), &url)
+        self.build_request(&self.http, method, path)
+    }
+
+    /// Low-level HTTP request builder for streaming responses.
+    ///
+    /// Uses a client with connect and read timeouts instead of a total
+    /// timeout, so long-running NDJSON responses are not cut short.
+    fn stream_request(&self, method: &str, path: &str) -> reqwest::RequestBuilder {
+        self.build_request(&self.stream_http, method, path)
     }
 }

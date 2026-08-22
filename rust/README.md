@@ -20,7 +20,7 @@ packages for other languages and environments. See
 - Async-first with [reqwest](https://crates.io/crates/reqwest) (rustls TLS)
 - Optional `blocking` feature provides a sync wrapper
 - Minimal dependency tree; `reqwest`, `serde`, `base64`, `thiserror`
-- Stream results as the server renders thumbnails (coming soon)
+- Stream results as the server renders thumbnails
 - In-memory LRU cache takes full advantage of HTTP cache headers
 - The client and server always provide placeholder images, even when disconnected
 - Typed results with media classification and metadata
@@ -66,6 +66,31 @@ fn main() -> Result<(), thumbrella::Error> {
     tbr.verify()?;
     let result = tbr.thumb("https://demo.thumbrella.dev/media/packing-boxes.avi")?;
     println!("{} bytes", result.media.unwrap().thumbnail.len());
+    Ok(())
+}
+```
+
+## Streaming
+
+`stream()` yields results as the server renders them, including intermediate
+results while slower thumbnails are still processing:
+
+```rust
+use futures_util::{pin_mut, StreamExt};
+use thumbrella_client as thumbrella;
+
+#[tokio::main]
+async fn main() -> Result<(), thumbrella::Error> {
+    let tbr = thumbrella::Client::new(None);
+    tbr.verify().await?;
+
+    let urls = ["https://example.com/a.jpg", "https://example.com/b.png"];
+    let stream = tbr.stream(&urls);
+    pin_mut!(stream);
+    while let Some(result) = stream.next().await {
+        println!("{} {}", result.url, result.status);
+    }
+
     Ok(())
 }
 ```
