@@ -1,0 +1,40 @@
+name: Release all clients
+
+# One-shot dispatcher: runs the three per-registry publish workflows with the
+# same git ref. Each child workflow targets its own protected environment
+# (npm / pypi / crates) with required reviewers, and publishes independently.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to publish (branch, tag, or commit SHA)'
+        required: true
+        type: string
+
+# Dispatching workflows via the API needs actions: write on the ambient token.
+permissions:
+  actions: write
+
+concurrency:
+  group: release-all-${{ github.event.inputs.ref }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch npm publish
+        run: gh workflow run npmjs.yaml -f ref="${{ github.event.inputs.ref }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Dispatch PyPI publish
+        run: gh workflow run pypi.yaml -f ref="${{ github.event.inputs.ref }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Dispatch crates.io publish
+        run: gh workflow run crates.yaml -f ref="${{ github.event.inputs.ref }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
