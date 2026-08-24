@@ -1,0 +1,61 @@
+name: Publish npm (@thumbrella/client)
+
+# Publishes the TypeScript client to the npm registry.
+#
+# Manual trigger only. Pass any git ref (branch, tag, or commit SHA); the
+# version is read from typescript/package.json at that ref, so bump it first
+# with platform/scripts/ci/prepare-release.py --scope clients.
+#
+# Auth: npm trusted publishing (OIDC) — no access token stored in the repo.
+# Register the package on npmjs.com under Settings > Trusted publishing with:
+#   owner/organization: thumbrella-dev
+#   repository:         clients
+#   workflow filename:  npmjs.yaml
+#   environment name:   npm
+# Provenance attestations are generated automatically (no --provenance flag).
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to publish (branch, tag, or commit SHA)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-npm-${{ github.event.inputs.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      # No package-lock.json is committed for libraries (see clients/.gitignore),
+      # so install straight from the manifest instead of `npm ci`.
+      - run: npm install
+
+      - run: npm run build
+
+      # Smoke check: the built entrypoint must load as an ES module.
+      - name: Smoke check
+        run: node -e "import('./dist/index.js').then(() => console.log('OK')).catch(e => { console.error(e); process.exit(1) })"
+
+      - name: Publish to npm
+        run: npm publish --access public

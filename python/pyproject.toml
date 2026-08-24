@@ -36,5 +36,5 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-thumbrella = ["*.jpg"]
+thumbrella = ["*.jpeg", "py.typed"]
 

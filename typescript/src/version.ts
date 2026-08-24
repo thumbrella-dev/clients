@@ -5,4 +5,4 @@
 // field in package.json (the patch number is intentionally omitted from the
 // agent string). scripts/bundle.ts verifies the two stay in sync when it
 // builds the CDN bundle.
-export const CLIENT_MAJOR_MINOR = "1.3";
+export const CLIENT_MAJOR_MINOR = "1.4";

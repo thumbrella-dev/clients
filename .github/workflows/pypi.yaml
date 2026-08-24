@@ -1,0 +1,56 @@
+name: Publish PyPI (thumbrella-client)
+
+# Publishes the Python client to PyPI via trusted publishing (OIDC).
+#
+# Manual trigger only. Pass any git ref (branch, tag, or commit SHA); the
+# version is read from python/pyproject.toml at that ref.
+#
+# PyPI must have a pending trusted publisher configured with:
+#   owner:        thumbrella-dev
+#   repository:   thumbrella-dev/clients
+#   workflow:     pypi.yaml
+#   environment:  pypi
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to publish (branch, tag, or commit SHA)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-pypi-${{ github.event.inputs.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: python -m pip install build
+
+      - name: Build package
+        run: python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # dist/ is produced under python/, and `uses:` actions do not inherit
+          # the run working-directory default, so point at it explicitly.
+          packages-dir: python/dist
