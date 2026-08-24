@@ -251,9 +251,11 @@ class Client:
 
         if self._asession is None:
             timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT)
+            headers = dict(self.session.headers)
+            headers.setdefault("User-Agent", _client_user_agent())
             self._asession = aiohttp.ClientSession(
                 timeout=timeout,
-                headers={"User-Agent": _client_user_agent()},
+                headers=headers,
             )
 
         # Split into server-sized chunks.

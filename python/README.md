@@ -41,14 +41,14 @@ import thumbrella
 tbr = thumbrella.Client().verify()
 
 # Single URL — returns a Result with the thumbnail JPEG.
-result = tbr.thumb("https://example.com/photo.jpg")
+result = tbr.thumb("https://www.pygame.org/docs/_images/pygame_lofi.png")
 if result.is_success():
     print(len(result.media.thumbnail), "bytes")
 
 # Batch many URLs at once.
 results = tbr.batch([
-    "https://example.com/a.jpg",
-    "https://example.com/b.png",
+    "https://www.python.org/static/img/python-logo-large.png",
+    "https://web.mit.edu/18.417/doc/pydocs/ref.pdf",
 ])
 for r in results:
     print(r.url, r.status, r.media.kind)
@@ -59,8 +59,8 @@ import asyncio
 async def stream_example():
     tbr = thumbrella.Client()
     async for r in tbr.stream([
-        "https://example.com/a.jpg",
-        "https://example.com/b.png",
+        "https://www.python.org/static/img/python-logo-large.png",
+        "https://web.mit.edu/18.417/doc/pydocs/ref.pdf",
     ]):
         print(r.url, r.status)
 
@@ -86,17 +86,16 @@ The client reads `$TBR_CONNECT` by default. Pass a connect string to override:
 thumbrella.Client("http://localhost:3114")
 
 # Cloud service with auth token
-thumbrella.Client("https://cloud.thumbrella.dev,tbr_e_3QnzBcWx7KpRmYT2000example")
-
-# Custom server with handshake value
-thumbrella.Client("https://my-server.example.com,my-handshake")
-
-# Custom HTTP headers
-thumbrella.Client("https://api.example.com,Authorization=Bearer tok,x-custom=val")
+thumbrella.Client("tbr_e_3QnzBcWx7KpRmYT2000example")
 ```
 
-The `session` attribute on a Client is a `requests.Session` — customize it for
-proxies, TLS certificates, cookies, or other HTTP-level configuration.
+The connect string can also define custom headers. Thumbrella servers can
+define an additional handshake token to prevent unwanted users. The documentation
+describes these in more detail at, https://thumbrella.dev/docs/client/#connect
+
+The `Client` object defines a `requests.Session` attribute which can be
+further customized for proxies, TLS certificates, cookies, or other HTTP-level 
+configuration.
 
 ### Result
 
@@ -113,15 +112,21 @@ result.is_fresh()    # True when the server freshly rendered (not from cache)
 result.verify()      # returns self on success, raises ThumbError on failure
 ```
 
+All the result properties are documented at, 
+https://thumbrella.dev/docs/client/#result
+
 ### Media
 
 ```python
 media.url          # str — the original media URL
-media.mime         # "image/jpeg" | ...
+media.mime         # "image/jpeg" | "application/pdf" | ...
 media.kind         # "image" | "video" | "document" | "vector" | "geometry" | ...
 media.file_size    # int — original file size in bytes
 media.thumbnail    # EncodedJpeg — the thumbnail JPEG bytes
 ```
+
+All the result properties are documented at, 
+https://thumbrella.dev/docs/client/#media
 
 ### EncodedJpeg
 
@@ -152,7 +157,7 @@ examples.
 
 ## Servers
 
-This client works with self-hosted Thumbrella servers and the online
+This client works with any self-hosted Thumbrella server and also the online
 Thumbrella Cloud service. Both are configured using the `$TBR_CONNECT`
 environment variable. Alternatively, a connect string can be passed to the
 `Client` constructor.

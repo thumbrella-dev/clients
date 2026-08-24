@@ -117,7 +117,9 @@ async def aio_ndjson(
         _record_backoff(host, response.status in (429, 503))
 
         if not response.ok:
-            return
+            raise ConnectionError(
+                f"server returned {response.status} {response.reason}"
+            )
         buf = b""
         async for chunk in response.content:
             buf += chunk
