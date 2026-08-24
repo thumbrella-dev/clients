@@ -22,7 +22,7 @@ packages for other languages and environments. See
 - Typed results with simple media metadata
 - Thumbrella server supports hundreds of formats
 
-## Quickstart
+## Quickstart - Node and server
 
 ```bash
 npm install @thumbrella/client
@@ -47,7 +47,7 @@ for await (const r of tbr.stream(media_urls)) {
 }
 ```
 
-## Quick Start — Browser
+## Quick Start - Browser
 
 ```html
 <script type="module">
@@ -67,18 +67,10 @@ spinner, placeholders, failures, caching, and lazy loading.
 | Import                               | Contents                                     |
 |--------------------------------------|----------------------------------------------|
 | `@thumbrella/client`                 | `Client`, `Result`, `Media`, `EncodedJpeg`, types |
-| `@thumbrella/client/browser`         | browser helpers + `<tbr-thumb>` element, `tbrSetup()` |
-| `@thumbrella/client/element`         | deprecated alias of `browser` (transition only) |
+| `@thumbrella/client/browser`         | browser helpers, `<tbr-thumb>` element, `tbrSetup()` |
 
-Node users only import from the root.  Browser users import from `browser` —
-the old `element` entry still works, but it's deprecated and will be removed
-in a future release.
-
-> **Migration:** `element.js` has been merged into `browser.js`.  If you
-> imported `@thumbrella/client/element.js` (or referenced the CDN file
-> `element.js`), switch to `@thumbrella/client/browser` / `browser.js`.
-> For this release the `element` entry ships as a byte-identical duplicate
-> so existing imports keep working.
+Node users only import from the root. Browser users import from `browser`,
+which includes the bundked Client and its functionality.
 
 ### Where to Run It
 
@@ -102,7 +94,8 @@ new Client("https://demo.thumbrella.dev");       // free demo server
 ```
 
 Thumbrella provides a [demo gallery](https://demo.thumbrella.dev) and server
-that can be used for free; no account, no signup, immediate access.
+that can be used for free; no account, no signup, immediate access to the
+media in its gallery.
 
 ## License
 

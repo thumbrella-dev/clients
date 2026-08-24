@@ -12,11 +12,6 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
-    "./element": {
-      "types": "./dist/element.d.ts",
-      "import": "./dist/element.js",
-      "default": "./dist/element.js"
-    },
     "./browser": {
       "types": "./dist/browser.d.ts",
       "import": "./dist/browser.js",
@@ -26,7 +21,6 @@
   "files": [
     "dist/",
     "README.md",
-    "element.js",
     "browser.js"
   ],
   "scripts": {
@@ -38,9 +32,7 @@
     "thumbrella",
     "thumbnail",
     "image",
-    "media",
-    "streaming",
-    "thumbnails"
+    "media"
   ],
   "repository": {
     "type": "git",
