@@ -43,10 +43,9 @@ async fn main() -> Result<(), thumbrella::Error> {
     tbr.verify().await?;
 
     let result = tbr.thumb("https://demo.thumbrella.dev/media/game-level.png").await?;
-    if let Some(media) = &result.media {
-        println!("{} bytes  {}", media.thumbnail.len(), media.kind);
-        std::fs::write("thumb.jpg", media.thumbnail.bytes())?;
-    }
+    let media = &result.media;
+    println!("{} bytes  {}", media.thumbnail.len(), media.kind);
+    std::fs::write("thumb.jpg", media.thumbnail.bytes())?;
 
     Ok(())
 }
@@ -65,7 +64,7 @@ fn main() -> Result<(), thumbrella::Error> {
     let tbr = thumbrella::blocking::BlockingClient::new(None);
     tbr.verify()?;
     let result = tbr.thumb("https://demo.thumbrella.dev/media/packing-boxes.avi")?;
-    println!("{} bytes", result.media.unwrap().thumbnail.len());
+    println!("{} bytes", result.media.thumbnail.len());
     Ok(())
 }
 ```
@@ -94,6 +93,28 @@ async fn main() -> Result<(), thumbrella::Error> {
     Ok(())
 }
 ```
+
+## Image libraries
+
+The JPEG payload is a plain `&[u8]`, so it loads into common image libraries
+without copying:
+
+```rust
+use thumbrella_client as thumbrella;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let tbr = thumbrella::Client::new(None);
+    let result = tbr.thumb("https://demo.thumbrella.dev/media/game-level.png").await?;
+
+    // Decode directly from the shared bytes (zero copy).
+    let img = image::load_from_memory(result.media.thumbnail.bytes())?;
+
+    Ok(())
+}
+```
+
+The `image` crate is a dependency of your own application, not of this client.
 
 ## Servers
 

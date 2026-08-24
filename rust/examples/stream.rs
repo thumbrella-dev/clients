@@ -34,9 +34,7 @@ async fn main() {
     pin_mut!(stream);
     while let Some(result) = stream.next().await {
         let elapsed = start.elapsed().as_millis();
-        let kind = result.media.as_ref()
-            .map(|m| format!("{}({})", m.kind, m.extension))
-            .unwrap_or_else(|| "<nomedia>".to_string());
+        let kind = format!("{}({})", result.media.kind, result.media.extension);
         println!(
             "{elapsed}ms {} - {} {} {} {}",
             result.url.split('/').next_back().unwrap_or(&result.url),

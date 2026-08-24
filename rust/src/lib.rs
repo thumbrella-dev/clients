@@ -5,9 +5,7 @@
 //! let tbr = thumbrella_client::Client::new(None);
 //! tbr.verify().await?;
 //! let result = tbr.thumb("https://example.com/photo.jpg").await?;
-//! if let Some(media) = &result.media {
-//!     println!("{} bytes  {}", media.thumbnail.len(), media.kind);
-//! }
+//! println!("{} bytes  {}", result.media.thumbnail.len(), result.media.kind);
 //! # Ok(())
 //! # }
 //! ```

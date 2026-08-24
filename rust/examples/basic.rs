@@ -28,18 +28,15 @@ async fn thumbnail(url: &str, path: &str) -> Result<(), Box<dyn std::error::Erro
     tbr.verify().await?;
 
     let result = tbr.thumb(url).await?;
-    if let Some(media) = &result.media {
-        fs::write(path, media.thumbnail.bytes())?;
-        println!(
-            "{} {:>8}  ->  {:>5} bytes  ({})  {path}",
-            media.kind,
-            media.file_size,
-            media.thumbnail.len(),
-            result.source.as_deref().unwrap_or("render"),
-        );
-    } else {
-        eprintln!("No media in result (status: {})", result.status);
-    }
+    let media = &result.media;
+    fs::write(path, media.thumbnail.bytes())?;
+    println!(
+        "{} {:>8}  ->  {:>5} bytes  ({})  {path}",
+        media.kind,
+        media.file_size,
+        media.thumbnail.len(),
+        result.source.as_deref().unwrap_or("render"),
+    );
 
     Ok(())
 }

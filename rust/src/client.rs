@@ -144,9 +144,7 @@ fn parse_connect(connect: Option<&str>) -> ConnectConfig {
 /// let tbr = thumbrella_client::Client::new(None);
 /// tbr.verify().await?;
 /// let result = tbr.thumb("https://example.com/photo.jpg").await?;
-/// if let Some(media) = &result.media {
-///     println!("{} bytes", media.thumbnail.len());
-/// }
+/// println!("{} bytes", result.media.thumbnail.len());
 /// # Ok(())
 /// # }
 /// ```
@@ -340,10 +338,8 @@ impl Client {
             })?;
 
             for item in batch.items {
-                if let Some(ref media) = item.media {
-                    for cache in &self.caches {
-                        cache.put(media);
-                    }
+                for cache in &self.caches {
+                    cache.put(&item.media);
                 }
                 done.insert(item.url.clone(), item);
             }
@@ -541,7 +537,7 @@ impl Client {
                         let mut r = ResultData::new(url.to_string());
                         r.status = status::SUCCESS.to_string();
                         r.source = Some(source::CACHE.to_string());
-                        r.media = Some(cached.clone());
+                        r.media = cached.clone();
                         done.insert(url.to_string(), r);
                         fresh = true;
                         break;
@@ -579,10 +575,8 @@ impl Client {
         if result.status != status::INTERMEDIATE {
             pending.remove(&result.url);
         }
-        if let Some(ref media) = result.media {
-            for cache in &self.caches {
-                cache.put(media);
-            }
+        for cache in &self.caches {
+            cache.put(&result.media);
         }
         Some(result)
     }

@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+/// Client-side placeholder JPEG, used when no server thumbnail is available.
+const FAILED_JPEG: &[u8] = include_bytes!("failed.jpeg");
+
 //  status constants
 
 pub mod status {
@@ -66,6 +69,11 @@ pub enum Error {
 /// server encodes the image into JSON it uses a base64 encoding, handled
 /// transparently by the `From<String>` / `Into<String>` impls.
 ///
+/// The JPEG payload is exposed as a plain `&[u8]` via [`Thumbnail::bytes`],
+/// so it loads directly into image libraries without copying. For libraries
+/// that want a seekable source, [`Thumbnail::reader`] returns a zero-copy
+/// [`std::io::Cursor`].
+///
 /// See <https://thumbrella.dev/docs/result> for full documentation.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
@@ -86,6 +94,16 @@ impl Thumbnail {
     /// The raw JPEG bytes.
     pub fn bytes(&self) -> &[u8] {
         &self.data
+    }
+
+    /// A zero-copy, seekable reader over the JPEG bytes.
+    ///
+    /// Returns a [`std::io::Cursor`] borrowing the payload, so the caller can
+    /// seek, buffer, and stream without copying. This is the standard in-memory
+    /// source accepted by image libraries that require `Read + Seek`, such as
+    /// `image::ImageReader::new`.
+    pub fn reader(&self) -> std::io::Cursor<&[u8]> {
+        std::io::Cursor::new(self.bytes())
     }
 
     /// Number of bytes in the JPEG payload.
@@ -124,6 +142,12 @@ impl PartialEq for Thumbnail {
 }
 
 impl Eq for Thumbnail {}
+
+impl AsRef<[u8]> for Thumbnail {
+    fn as_ref(&self) -> &[u8] {
+        self.bytes()
+    }
+}
 
 impl From<Vec<u8>> for Thumbnail {
     fn from(data: Vec<u8>) -> Self {
@@ -195,7 +219,32 @@ pub struct Media {
     pub placeholder: String,
 }
 
+impl Default for Media {
+    /// A failed result: an empty media record with a placeholder JPEG.
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            thumbnail: Thumbnail::from(FAILED_JPEG.to_vec()),
+            mime: "image/jpeg".to_string(),
+            file_size: 0,
+            kind: String::new(),
+            extension: "jpeg".to_string(),
+            properties: serde_json::Value::Null,
+            cache: String::new(),
+            placeholder: String::new(),
+        }
+    }
+}
+
 impl Media {
+    /// Media for a client-side failure (server unreachable, invalid URL, etc.).
+    ///
+    /// The thumbnail is the shared placeholder JPEG, so every result carries an
+    /// image even when no server was contacted.
+    pub fn failed(url: &str) -> Self {
+        Self { url: url.to_string(), ..Self::default() }
+    }
+
     pub fn is_fresh(&self) -> bool {
         if self.cache.is_empty() {
             return false;
@@ -253,15 +302,24 @@ pub struct ResultData {
     pub http_status: Option<u16>,
     #[serde(default)]
     pub source: Option<String>,
-    #[serde(default)]
-    pub media: Option<Media>,
+    #[serde(default, deserialize_with = "deserialize_media_or_default")]
+    pub media: Media,
     /// Raw server JSON.
     #[serde(skip)]
     pub raw: serde_json::Value,
 }
 
+/// Treat a missing or `null` media value as the default failed media.
+fn deserialize_media_or_default<'de, D>(deserializer: D) -> Result<Media, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<Media>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 impl ResultData {
     pub fn new(url: String) -> Self {
+        let media = Media::failed(&url);
         Self {
             url,
             status: status::UNAVAILABLE.to_string(),
@@ -270,13 +328,13 @@ impl ResultData {
             message: None,
             http_status: None,
             source: Some(source::CLIENT.to_string()),
-            media: None,
+            media,
             raw: serde_json::Value::Null,
         }
     }
 
     pub fn is_fresh(&self) -> bool {
-        self.media.as_ref().is_some_and(|m| m.is_fresh())
+        self.media.is_fresh()
     }
 
     pub fn is_success(&self) -> bool {
@@ -302,4 +360,34 @@ pub(crate) struct BatchResponse {
 pub(crate) struct HealthResponse {
     #[serde(default)]
     pub status: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Seek, SeekFrom};
+
+    #[test]
+    fn reader_is_zero_copy_and_seekable() {
+        let data: Vec<u8> = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46];
+        let thumb = Thumbnail::from(data.clone());
+
+        let mut reader = thumb.reader();
+        let mut header = [0u8; 4];
+        reader.read_exact(&mut header).unwrap();
+        assert_eq!(header, [0xFF, 0xD8, 0xFF, 0xE0]);
+
+        reader.seek(SeekFrom::Start(0)).unwrap();
+        let mut all = Vec::new();
+        reader.read_to_end(&mut all).unwrap();
+        assert_eq!(all, data);
+    }
+
+    #[test]
+    fn as_ref_exposes_raw_bytes() {
+        let data = vec![1u8, 2, 3, 4, 5];
+        let thumb = Thumbnail::from(data.clone());
+        assert_eq!(thumb.as_ref(), data.as_slice());
+        assert_eq!(thumb.bytes(), data.as_slice());
+    }
 }
