@@ -16,11 +16,13 @@ packages for other languages and environments. See
 - Zero runtime dependencies, only needs `fetch`
 - Runs in Node 18+, Deno, Bun, and modern browsers
 - Optional `<tbr-thumb>` element for browser environments
-- Stream results as the server renders thumbnails
-- LRU cache takes full advantage of HTTP cache headers and can persist
-- Always provide placeholder images, even when disconnected
+- Single call efficiently processes multiple thumbnails in parallel
+- Stream async results as the server renders thumbnails
+- Client caching integrates with server and HTTP
+- Placeholders for failures, even if disconnected or misconfigured
+- Load easily into `sharp` and other image libraries
 - Typed results with simple media metadata
-- Thumbrella server supports hundreds of formats
+- Thumbrella server supports 100+ formats
 
 ## Quickstart - Node and server
 

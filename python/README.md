@@ -16,13 +16,12 @@ has packages for other languages and environments. See
 
 - Client defaults to synchronous requests with [requests](https://pypi.org/project/requests/)
 - Async support via `thumbrella-client[async]` using [aiohttp](https://pypi.org/project/aiohttp/)
-- The `batch()` call processes multiple URLs in parallel
-- In-memory LRU cache takes full advantage of HTTP cache headers
-- Binary thumbnail data loads easily into PIL, Qt, Pygame, or any other image library
-- The client and server always provide placeholder images, even when disconnected or misconfigured
-- Optional `verify()` methods promote failed results into exceptions
-- Media classification and lightweight metadata provided with every result
-- Thumbrella server supports hundreds of formats
+- Single call efficiently processes multiple thumbnails in parallel
+- Persistent client caching integrates with server and HTTP
+- Placeholders for failures, even if disconnected or misconfigured
+- Typed results with simple media metadata
+- Load easily into `PIL`, `Qt`, `Pygame`, and others
+- Thumbrella server supports 100+ formats
 
 ## Quickstart
 

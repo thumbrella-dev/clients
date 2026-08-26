@@ -6,10 +6,6 @@ for images, video, documents, and more.
 [![Crates.io](https://img.shields.io/crates/v/thumbrella-client)](https://crates.io/crates/thumbrella-client)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/thumbrella-dev/clients/blob/main/LICENSE)
 
-> Thumbrella is still in early releases. The server functionality is operational,
-> but several production components have yet to appear. Recommended for early
-> evaluation only.
-
 The [client git repository](https://github.com/thumbrella-dev/clients) also has
 packages for other languages and environments. See
 [TypeScript](https://www.npmjs.com/package/@thumbrella/client),
@@ -20,11 +16,12 @@ packages for other languages and environments. See
 - Async-first with [reqwest](https://crates.io/crates/reqwest) (rustls TLS)
 - Optional `blocking` feature provides a sync wrapper
 - Minimal dependency tree; `reqwest`, `serde`, `base64`, `thiserror`
-- Stream results as the server renders thumbnails
-- In-memory LRU cache takes full advantage of HTTP cache headers
-- The client and server always provide placeholder images, even when disconnected
-- Typed results with media classification and metadata
-- Thumbrella server supports hundreds of formats
+- Single call efficiently processes multiple thumbnails in parallel
+- Stream async results as the server renders thumbnails
+- Persistent client caching integrates with server and HTTP
+- Placeholders for failures, even if disconnected or misconfigured
+- Typed results with simple media metadata
+- Thumbrella server supports 100+ formats
 
 ## Quickstart
 
