@@ -4,9 +4,10 @@ name: Deploy CDN (js.thumbrella.dev)
 # every published version) to the Cloudflare Pages project that backs
 # js.thumbrella.dev.
 #
-# Manual trigger only, with the same `ref` input as npmjs.yaml.  Every
-# version's bundle is rebuilt from its published npm tarball, so run this
-# AFTER a successful npm publish so the released version is on the registry.
+# Manual trigger only.  Runs on the repo's default branch; the checkout only
+# supplies this script and its devDependencies (esbuild/tsx) - the deployed
+# bundles are rebuilt entirely from the published npm tarballs.  Run AFTER a
+# successful npm publish so the released version is on the registry.
 #
 # Auth: CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID repo secrets.  The Pages
 # project must already exist as a direct upload project (create once with
@@ -15,29 +16,23 @@ name: Deploy CDN (js.thumbrella.dev)
 
 on:
   workflow_dispatch:
-    inputs:
-      ref:
-        description: 'Git ref to deploy (branch, tag, or commit SHA)'
-        required: true
-        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: deploy-cdn-${{ github.event.inputs.ref }}
+  group: deploy-cdn
   cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: pages-cdn
     defaults:
       run:
         working-directory: typescript
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.ref }}
 
       - uses: actions/setup-node@v6
         with:

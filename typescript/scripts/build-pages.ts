@@ -16,12 +16,13 @@
  * registry.  Produced layout:
  *   public/<version>/tbr.js
  *   public/<version>/tbr.js.map
+ *   public/index.html    landing page (scripts/pages-index.html)
  *   public/_redirects    floating aliases -> exact versions (302)
  *   public/_headers      CORS + immutable caching for the bundles
  */
 
 import * as esbuild from "esbuild";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { resolve, dirname, join } from "node:path";
@@ -206,9 +207,13 @@ async function main(): Promise<void> {
   ].join("\n");
   writeFileSync(resolve(out, "_redirects"), redirects);
   writeFileSync(resolve(out, "_headers"), HEADERS);
+  writeFileSync(
+    resolve(out, "index.html"),
+    readFileSync(resolve(root, "scripts", "pages-index.html"), "utf-8"),
+  );
 
   console.log(`  staged ${staged.length} versions (${skipped} skipped)`);
-  console.log("  wrote _redirects + _headers");
+  console.log("  wrote _redirects + _headers + index.html");
   console.log("Ready: wrangler pages deploy public --project-name thumbrella-js");
 }
 
