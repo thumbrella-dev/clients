@@ -8,9 +8,10 @@
  * IndexedDB caching, shared Client singleton, global configuration,
  * and the `<tbr-thumb>` custom element (`TbrThumb`, `tbrSetup`).
  *
- * `element.ts` has been merged into this module — `@thumbrella/client/browser`
- * is the single browser entry point.  (`element.js` is still published as a
- * byte-identical copy for one release to ease migration.)
+ * `element.ts` has been merged into this module -- `@thumbrella/client/browser`
+ * is the single browser entry point.  The deprecated `@thumbrella/client/element`
+ * npm export is a thin re-export of this module (see src/element.ts); the
+ * packed CDN copy of element.js has been removed.
  */
 
 import type { CacheBackend } from "./cache.js";
@@ -379,8 +380,8 @@ function createIndexedDbCache(maxMb: number): CacheBackend {
 //
 // Previously a separate module (element.ts / element.js).  It now lives here
 // so `@thumbrella/client/browser` is the single browser entry point.  The
-// old `element.js` entry is published as a byte-identical copy of `browser.js`
-// for one release to ease migration.
+// deprecated `@thumbrella/client/element` npm export is a thin re-export of
+// this module (see src/element.ts).
 
 // Module state
 

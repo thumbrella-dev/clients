@@ -1,0 +1,61 @@
+name: Deploy CDN (js.thumbrella.dev)
+
+# Deploys the browser bundles (@thumbrella/client tbr.js + tbr.js.map for
+# every published version) to the Cloudflare Pages project that backs
+# js.thumbrella.dev.
+#
+# Manual trigger only, with the same `ref` input as npmjs.yaml.  Every
+# version's bundle is rebuilt from its published npm tarball, so run this
+# AFTER a successful npm publish so the released version is on the registry.
+#
+# Auth: CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID repo secrets.  The Pages
+# project must already exist as a direct upload project (create once with
+# `npx wrangler pages project create thumbrella-js`) and be connected to the
+# js.thumbrella.dev custom domain.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to deploy (branch, tag, or commit SHA)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-cdn-${{ github.event.inputs.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      # No package-lock.json is committed for libraries (see clients/.gitignore),
+      # so install straight from the manifest instead of `npm ci`.
+      - run: npm install
+
+      # Stage public/: for every published version >= 1.2.0, download the npm
+      # tarball, bundle dist/browser.js into tbr.js (+ .map), and regenerate
+      # _redirects + _headers.  Stateless - the whole collection is rebuilt
+      # from the npm registry on every deploy.
+      - name: Stage Pages deployment
+        run: npx tsx scripts/build-pages.ts
+
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@4 pages deploy public --project-name thumbrella-js

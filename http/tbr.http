@@ -1,6 +1,6 @@
 # Pick a custom host url, or put in your own private key, or use the demo site
-#@host = https://cloud.thumbrella.dev
 @host = https://demo.thumbrella.dev
+#@host = https://cloud.thumbrella.dev
 #@host = http://localhost:3114
 
 @token = none
