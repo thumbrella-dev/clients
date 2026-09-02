@@ -282,7 +282,10 @@ export class Client {
             const resultData = parseBatchLine(parsed);
             if (!resultData) continue;
             const itemUrl = resultData.url as string | undefined;
-            if (itemUrl) pending.delete(itemUrl);
+            // Only a terminal result completes a URL. Intermediate results must
+            // not remove the URL from `pending`, otherwise an interrupted stream
+            // leaves that element stuck in the loading state forever.
+            if (itemUrl && resultData.status !== Status.INTERMEDIATE) pending.delete(itemUrl);
             yield resultFromServer(resultData, this.caches, this.baseUrl);
           } catch {
             // skip malformed lines
@@ -295,7 +298,7 @@ export class Client {
           const resultData = parseBatchLine(parsed);
           if (resultData) {
             const itemUrl = resultData.url as string | undefined;
-            if (itemUrl) pending.delete(itemUrl);
+            if (itemUrl && resultData.status !== Status.INTERMEDIATE) pending.delete(itemUrl);
             yield resultFromServer(resultData, this.caches, this.baseUrl);
           }
         } catch {
