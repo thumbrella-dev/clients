@@ -1,0 +1,112 @@
+name: Release client JS bundle
+
+# Creates a GitHub Release holding the canonical, attested tbr.js for ONE
+# published version of @thumbrella/client, with SLSA build provenance.
+#
+# Manual trigger only. Pass any git ref (branch, tag, or commit SHA); the
+# version is read from typescript/package.json at that ref.
+#
+# Run AFTER the npm publish (npmjs.yaml) so the version's tarball is on the
+# registry: release-stage.ts rebuilds the bundle from that tarball with the
+# shared, minified esbuild options, so the released bytes are deterministic and
+# equal to what the CDN staging (build-cdn.ts) serves for the version.
+#
+# Produces for <version>:
+#   - GitHub release  client-js-v<version>  (tag + assets)
+#       assets: tbr.js, tbr.js.map, checksums.txt (sha256)
+#   - build provenance attestations over tbr.js + tbr.js.map
+#
+# Verify (after downloading from the release OR from the CDN, which serves the
+# same bytes):
+#   gh attestation verify ./tbr.js --repo thumbrella-dev/clients
+#   gh attestation verify ./tbr.js.map --repo thumbrella-dev/clients
+#
+# Note: artifact attestations on public repos are only generated for runs on
+# the default branch, so trigger this from the default branch (the
+# workflow_dispatch default).  The package.json version must be bumped first,
+# as with the npm publish.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to release (branch, tag, or commit SHA)'
+        required: true
+        type: string
+      force_overwrite:
+        description: 'If the release client-js-v<version> already exists, replace its assets and re-attest (only for fixing a botched fresh release - never for a version already served on the CDN)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: release-client-js-${{ github.event.inputs.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - run: npm install
+
+      - name: Resolve version
+        id: ver
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      # Stages <version>/tbr.js + tbr.js.map + checksums.txt under typescript/.stage.
+      # Fails if the version is not on the npm registry yet (publish first).
+      - name: Build canonical bundle
+        run: npx tsx scripts/release-stage.ts "${{ steps.ver.outputs.version }}" --out .stage
+
+      - name: Show sha256
+        run: cat ".stage/${{ steps.ver.outputs.version }}/checksums.txt"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ver="${{ steps.ver.outputs.version }}"
+          tag="client-js-v${ver}"
+          dir=".stage/${ver}"
+          repo="${{ github.repository }}"
+          if ! gh release view "${tag}" --repo "${repo}" >/dev/null 2>&1; then
+            gh release create "${tag}" \
+              --repo "${repo}" \
+              --target "${{ github.event.inputs.ref }}" \
+              --title "Thumbrella client JS v${ver}" \
+              --notes "Browser bundle for @thumbrella/client v${ver} (served at https://js.thumbrella.dev/${ver}/tbr.js). sha256 in checksums.txt. Verify with: gh attestation verify ./tbr.js --repo ${repo}" \
+              "${dir}/tbr.js" "${dir}/tbr.js.map" "${dir}/checksums.txt"
+          elif [ "${{ github.event.inputs.force_overwrite }}" = "true" ]; then
+            echo "::warning::overwriting assets for ${tag} and re-attesting (only safe for a version never served on the CDN)"
+            gh release upload "${tag}" \
+              "${dir}/tbr.js" "${dir}/tbr.js.map" "${dir}/checksums.txt" \
+              --clobber --repo "${repo}"
+          else
+            echo "::error::release ${tag} already exists; refusing to overwrite. Re-run only to fix a botched fresh release with force_overwrite=true - never for a version already served on the CDN."
+            exit 1
+          fi
+
+      # Attest the release assets. subject-path is relative to the repo root
+      # (typescript/.stage/...). Requires id-token: write + attestations: write.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: |
+            typescript/.stage/${{ steps.ver.outputs.version }}/tbr.js
+            typescript/.stage/${{ steps.ver.outputs.version }}/tbr.js.map

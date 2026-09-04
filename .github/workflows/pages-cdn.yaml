@@ -1,13 +1,19 @@
 name: Deploy CDN (js.thumbrella.dev)
 
-# Deploys the browser bundles (@thumbrella/client tbr.js + tbr.js.map for
-# every published version) to the Cloudflare Pages project that backs
-# js.thumbrella.dev.
+# Deploys the js.thumbrella.dev browser bundles (@thumbrella/client tbr.js +
+# tbr.js.map) to the Cloudflare Pages project backing that domain.
 #
-# Manual trigger only.  Runs on the repo's default branch; the checkout only
-# supplies this script and its devDependencies (esbuild/tsx) - the deployed
-# bundles are rebuilt entirely from the published npm tarballs.  Run AFTER a
-# successful npm publish so the released version is on the registry.
+# Manual trigger only. Runs on the repo's default branch; public/ is staged by
+# scripts/build-cdn.ts. For each published version >= 1.2.0 the source is:
+#   1. canonical  - a "client-js-v<version>" GitHub release exists: the RELEASED
+#                   (attested) assets are downloaded, never rebuilt.
+#   2. frozen     - legacy 1.2.0-1.4.0 with no release: the bytes already live
+#                   on the CDN are copied unchanged (they are immutable-cached).
+#   3. fallback   - neither (fresh publish racing its release): deterministic
+#                   minified build from the npm tarball, byte-identical to the
+#                   eventual release.
+# Run AFTER npm publish and AFTER the client-js release/attestation workflow so
+# the CDN serves exactly the attested bytes.
 #
 # Auth: CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID repo secrets.  The Pages
 # project must already exist as a direct upload project (create once with
@@ -39,15 +45,17 @@ jobs:
           node-version: '24'
 
       # No package-lock.json is committed for libraries (see clients/.gitignore),
-      # so install straight from the manifest instead of `npm ci`.
+      # so install straight from the manifest instead of `npm ci`. esbuild is
+      # pinned exactly so rebuilds are byte-deterministic.
       - run: npm install
 
-      # Stage public/: for every published version >= 1.2.0, download the npm
-      # tarball, bundle dist/browser.js into tbr.js (+ .map), and regenerate
-      # _redirects + _headers.  Stateless - the whole collection is rebuilt
-      # from the npm registry on every deploy.
+      # Stage public/ (see build-cdn.ts for the canonical/frozen/fallback
+      # resolution). GITHUB_TOKEN keeps the GitHub release lookup off the
+      # unauthenticated rate limit.
       - name: Stage Pages deployment
-        run: npx tsx scripts/build-pages.ts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: npx tsx scripts/build-cdn.ts
 
       - name: Deploy to Cloudflare Pages
         env:

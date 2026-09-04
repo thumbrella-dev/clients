@@ -2,6 +2,7 @@
 
 ## Development
 
+- Attestation for bundled js  /typescript
 - Fix intermediate stream tracking for Typescript  /typescript
 
 ## 1.4.0 - 2026/08/21

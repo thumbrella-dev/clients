@@ -22,20 +22,14 @@
  *   public/_headers      CORS on files, no-store on floating aliases
  */
 
-import * as esbuild from "esbuild";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { downloadAndExtractTarball, bundleEntry, MIN_VERSION } from "./bundle.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "..");
 const out = resolve(root, "public");
-
-const PACKAGE = "@thumbrella/client";
-// First version that shipped dist/browser.js (the entry we bundle).
-const MIN_VERSION = "1.2.0";
 
 type SemVer = [number, number, number];
 
@@ -75,17 +69,6 @@ async function publishedVersions(): Promise<PublishInfo[]> {
   return infos;
 }
 
-function banner(version: string): string {
-  return [
-    "/*!",
-    ` * @thumbrella/client  v${version}`,
-    " * Browser bundle -- DO NOT EDIT",
-    " * https://github.com/thumbrella-dev/clients/tree/main/typescript",
-    " */",
-    "",
-  ].join("\n");
-}
-
 // Download a version's tarball, bundle its dist/browser.js, and stage the
 // result as public/<version>/tbr.js (+ .map).  Returns false if the tarball
 // has no dist/browser.js.
@@ -93,42 +76,23 @@ async function bundleVersion(version: string, tarball: string): Promise<boolean>
   const dir = resolve(out, version);
   mkdirSync(dir, { recursive: true });
 
-  const tmp = join(tmpdir(), `thumbrella-${version}`);
-  rmSync(tmp, { recursive: true, force: true });
-  mkdirSync(tmp, { recursive: true });
+  let ok = false;
   try {
-    const res = await fetch(tarball);
-    if (!res.ok) throw new Error(`tarball fetch failed for ${version}: HTTP ${res.status}`);
-    writeFileSync(join(tmp, "pkg.tgz"), new Uint8Array(await res.arrayBuffer()));
+    const pkgDir = await downloadAndExtractTarball(version, tarball, dir);
 
-    const tar = spawnSync("tar", ["-xzf", join(tmp, "pkg.tgz"), "-C", tmp], {
-      encoding: "utf-8",
-    });
-    if (tar.status !== 0) {
-      throw new Error(`tar extraction failed for ${version}: ${tar.stderr?.trim()}`);
-    }
-
-    const entry = join(tmp, "package", "dist", "browser.js");
+    const entry = join(pkgDir, "dist", "browser.js");
     if (!existsSync(entry)) {
       console.warn(`  ${version}: no dist/browser.js in tarball; skipping`);
-      return false;
+      ok = false;
+    } else {
+      await bundleEntry(version, entry, resolve(dir, "tbr.js"));
+      console.log(`  staged ${version}/tbr.js (+ .map) [bundled from npm]`);
+      ok = true;
     }
-
-    await esbuild.build({
-      entryPoints: [entry],
-      bundle: true,
-      format: "esm",
-      platform: "browser",
-      target: "es2022",
-      sourcemap: true, // external: writes tbr.js.map next to tbr.js
-      banner: { js: banner(version) },
-      outfile: resolve(dir, "tbr.js"),
-    });
-    console.log(`  staged ${version}/tbr.js (+ .map) [bundled from npm]`);
-    return true;
   } finally {
-    rmSync(tmp, { recursive: true, force: true });
+    rmSync(join(dir, "package"), { recursive: true, force: true });
   }
+  return ok;
 }
 
 interface Alias {
