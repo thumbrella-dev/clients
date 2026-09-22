@@ -29,7 +29,8 @@
     "thumbrella",
     "thumbnail",
     "image",
-    "media"
+    "media",
+    "tbr-thumb"
   ],
   "repository": {
     "type": "git",
