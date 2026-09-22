@@ -2,6 +2,7 @@
 
 ## Development
 
+- Update typescript to 7  /typescript
 - Attestation for bundled js  /typescript
 - Fix intermediate stream tracking for Typescript  /typescript
 
