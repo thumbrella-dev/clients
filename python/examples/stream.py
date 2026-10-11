@@ -36,7 +36,7 @@ def _report(start: float, result: thumbrella.Result):
     duration = (time.time() - start) * 1000
     base = result.url.rsplit("/", 1)[-1]
     msg = f'"{result.message}"' or ''
-    print(f"{duration:,.0f}ms {result.status} {base} - {kind}, {result.source} {msg}")
+    print(f"{duration:,.0f}ms {result.status} {base} - {kind}, {result.source} {msg} pin={result.pin}")
 
 if __name__ == "__main__":
     main()

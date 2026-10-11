@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+from urllib.parse import urljoin
 from typing import Any, AsyncIterator, Sequence
 
 import requests
@@ -64,7 +65,10 @@ class Client:
     ) -> None:
         self.session: requests.Session = requests.Session()
         self._asession: Any = None  # lazy aiohttp.ClientSession
-        self.base_url, self.host_name = parse_connect(connect, self.session)
+        connect_info = parse_connect(connect, self.session)
+        self.base_url = connect_info.base_url
+        self.host_name = connect_info.host
+        self._connect_source = connect_info.source
         self.session.headers["User-Agent"] = _client_user_agent()
 
         if caches is None:
@@ -124,10 +128,28 @@ class Client:
             raise VerifyError(f"connect unexpected response: {data}")
         if data.get("token") is False:
             if "Authorization" in self.session.headers:
-                raise VerifyError("thumbrella connect invalid token")
-            else:
-                raise VerifyError("thumbrella connect requires a token")
+                raise VerifyError("Thumbrella connect token is invalid")
+            raise VerifyError(self._missing_token_message())
         return self
+
+    def _missing_token_message(self) -> str:
+        """Explain why a token is missing, based on where the connect string
+        came from. This points at the actual problem and how to fix it,
+        instead of a bare "requires a token" message."""
+        if self._connect_source == "default":
+            return (
+                "Connection string $TBR_CONNECT is not defined "
+                "(set to server URL or Thumbrella Cloud token)"
+            )
+        if self._connect_source == "env":
+            return (
+                "Connection string $TBR_CONNECT does not include a token "
+                "(Thumbrella Cloud requires one)"
+            )
+        return (
+            "Connect string does not include a token "
+            "(Thumbrella Cloud requires one)"
+        )
 
     def thumb(self, url: str) -> Result:
         """Get a single url result and fail if unsuccessful.
@@ -199,7 +221,10 @@ class Client:
                     return _fail_all(done, stale, urls, "unexpected server response")
 
                 for item in items:
-                    result = _result_from_server(item, caches=self.caches, server_key=self.base_url)
+                    result = _result_from_server(
+                        item, caches=self.caches, server_key=self.base_url,
+                        request_url=self.base_url + "/batch",
+                    )
                     done[result.url] = result
 
         return _ordered_results(done, urls)
@@ -274,7 +299,8 @@ class Client:
                     if result_data.get("status") != Status.INTERMEDIATE:
                         pending.discard(item_url)
                     result = _result_from_server(
-                        result_data, caches=self.caches, server_key=self.base_url
+                        result_data, caches=self.caches, server_key=self.base_url,
+                        request_url=self.base_url + "/batch",
                     )
                     yield result
             except Exception as exc:
@@ -335,6 +361,7 @@ def _result_from_server(
     *,
     caches: Sequence[Cache],
     server_key: str,
+    request_url: str,
 ) -> Result:
     """Build a :class:`Result` from a server response item, with identity sharing.
 
@@ -358,6 +385,8 @@ def _result_from_server(
     else:
         result = Result(item)
 
+    if result.pin is not None:
+        result.pin = urljoin(request_url, result.pin)
     put_all_caches(caches, result.media)
     return result
 
@@ -452,5 +481,4 @@ def _preflight_urls(
         stale.append(item)
 
     return done, stale
-
 

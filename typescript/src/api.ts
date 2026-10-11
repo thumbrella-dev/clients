@@ -20,15 +20,40 @@ const HTTP_TIMEOUT_MS = 12_000;
 const BATCH_MAX_ITEMS = 12;
 
 
+/**
+ * Where the effective connect string came from.
+ *
+ * - `argument`: passed explicitly to the `Client` constructor.
+ * - `env`: read from `$TBR_CONNECT` (or the `TBR_CONNECT` browser global).
+ * - `default`: nothing was set, so the Thumbrella Cloud default is used.
+ */
+export type ConnectSource = "argument" | "env" | "default";
+
 export function parseConnect(connect?: string): ConnectConfig {
-  const raw = connect
-    || (typeof process !== "undefined" && process.env.TBR_CONNECT)
-    || DEFAULT_BASE;
+  let raw: string;
+  let source: ConnectSource;
+  if (connect) {
+    raw = connect;
+    source = "argument";
+  } else {
+    const env = envConnect();
+    if (env) {
+      raw = env;
+      source = "env";
+    } else {
+      raw = DEFAULT_BASE;
+      source = "default";
+    }
+  }
 
   // Bare value, no scheme.  Only auth tokens are valid without a URL.
   if (!raw.includes("://")) {
     if (isAuthToken(raw)) {
-      return { baseUrl: DEFAULT_BASE, headers: { Authorization: `Bearer ${raw}` } };
+      return {
+        baseUrl: DEFAULT_BASE,
+        headers: { Authorization: `Bearer ${raw}` },
+        source,
+      };
     }
     throw new Error(
       "bare connect string without a URL must be an auth token (tbr_[a-z]_...)",
@@ -57,7 +82,7 @@ export function parseConnect(connect?: string): ConnectConfig {
     }
   }
 
-  return { baseUrl: urlPart.replace(/\/+$/, ""), headers };
+  return { baseUrl: urlPart.replace(/\/+$/, ""), headers, source };
 }
 
 
@@ -83,6 +108,7 @@ export class Client {
   readonly baseUrl: string;
   private headers: Record<string, string>;
   private caches: Cache[];
+  private connectSource: ConnectSource;
 
   constructor(connectOrOpts?: string | {
     connect?: string;
@@ -98,6 +124,7 @@ export class Client {
       "User-Agent": `thumbrella-ts/${CLIENT_MAJOR_MINOR}`,
       ...cfg.headers,
     };
+    this.connectSource = cfg.source;
     this.caches = opts.caches === undefined
       ? [new MemoryCache()]
       : opts?.caches ?? [];
@@ -145,11 +172,30 @@ export class Client {
     if (data?.token === false) {
       throw new VerifyError(
         this.headers.Authorization
-          ? "Thumbrella connect invalid token"
-          : "Thumbrella connect requires a token",
+          ? "Thumbrella connect token is invalid"
+          : this.missingTokenMessage(),
       );
     }
     return this;
+  }
+
+  /**
+   * Explain why a token is missing, based on where the connect string came
+   * from.  This points at the actual problem and how to fix it, instead of a
+   * bare "requires a token" message.
+   */
+  private missingTokenMessage(): string {
+    switch (this.connectSource) {
+      case "default":
+        return "Connection string $TBR_CONNECT is not defined "
+          + "(set to server URL or Thumbrella Cloud token)";
+      case "env":
+        return "Connection string $TBR_CONNECT does not include a token "
+          + "(Thumbrella Cloud requires one)";
+      default:
+        return "Connect string does not include a token "
+          + "(Thumbrella Cloud requires one)";
+    }
   }
 
   /**
@@ -286,7 +332,7 @@ export class Client {
             // not remove the URL from `pending`, otherwise an interrupted stream
             // leaves that element stuck in the loading state forever.
             if (itemUrl && resultData.status !== Status.INTERMEDIATE) pending.delete(itemUrl);
-            yield resultFromServer(resultData, this.caches, this.baseUrl);
+            yield resultFromServer(resultData, this.caches, this.baseUrl, url);
           } catch {
             // skip malformed lines
           }
@@ -299,7 +345,7 @@ export class Client {
           if (resultData) {
             const itemUrl = resultData.url as string | undefined;
             if (itemUrl && resultData.status !== Status.INTERMEDIATE) pending.delete(itemUrl);
-            yield resultFromServer(resultData, this.caches, this.baseUrl);
+            yield resultFromServer(resultData, this.caches, this.baseUrl, url);
           }
         } catch {
           // ignore
@@ -388,6 +434,24 @@ export class Client {
 interface ConnectConfig {
   baseUrl: string;
   headers: Record<string, string>;
+  source: ConnectSource;
+}
+
+/**
+ * Read the ambient connect string from the environment.
+ *
+ * Checks the Node `$TBR_CONNECT` environment variable first, then the
+ * `TBR_CONNECT` global when running in a browser.
+ */
+function envConnect(): string | undefined {
+  if (typeof process !== "undefined" && process.env.TBR_CONNECT) {
+    return process.env.TBR_CONNECT;
+  }
+  if (typeof window !== "undefined") {
+    const global = (window as unknown as Record<string, string>).TBR_CONNECT;
+    if (global) return global;
+  }
+  return undefined;
 }
 
 /** True when a value looks like a Thumbrella auth token (`tbr_[a-z]_` prefix). */
@@ -503,7 +567,16 @@ function resultFromServer(
   item: Record<string, unknown>,
   caches: readonly Cache[],
   serverKey: string,
+  requestUrl: string,
 ): Result {
+  const r = new Result(item);
+  if (r.pin !== null) {
+    try {
+      r.pin = new URL(r.pin, requestUrl).href;
+    } catch (error) {
+      return Result.clientFail(r.url, `invalid pin URL: ${error}`);
+    }
+  }
   const source = item.source as string | undefined;
   const placeholder = item.placeholder as string | undefined;
 
@@ -511,7 +584,6 @@ function resultFromServer(
     const url = (item.url as string) ?? "";
     const media = mediaFromCaches(url, caches);
     if (media) {
-      const r = new Result(item);
       r.media = media;
       putAllCaches(caches, r.media);
       return r;
@@ -525,13 +597,11 @@ function resultFromServer(
     const media = new Media(mediaRaw ?? {});
     media.thumbnail = thumb;
     media.placeholder = placeholder;
-    const r = new Result(item);
     r.media = media;
     putAllCaches(caches, r.media);
     return r;
   }
 
-  const r = new Result(item);
   putAllCaches(caches, r.media);
   return r;
 }
@@ -545,4 +615,3 @@ function checkBackoff(host: string): void {
     throw new ConnectionError(`${host} is throttled, retry later`);
   }
 }
-

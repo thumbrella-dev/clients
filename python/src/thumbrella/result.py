@@ -54,10 +54,13 @@ class Result:
     raw json data returned by the server, although the thumbnail binary data
     is removed for efficiency.
 
+    ``pin`` is an absolute URL for the pinned JPEG, or ``None`` when unavailable
+    or omitted by an older server.
+
     """
     __slots__ = (
         "url", "status", "message", "source", "duration", "download_size",
-        "http_status", "media", "raw", "__weakref__",
+        "http_status", "pin", "media", "raw", "__weakref__",
     )
 
     def __init__(
@@ -72,6 +75,7 @@ class Result:
         self.status: str = data.get("status", Status.UNAVAILABLE)
         self.message: str | None = data.get("message")
         self.source: str | None = data.get("source", Source.CLIENT)
+        self.pin: str | None = data.get("pin")
         self.duration: float = float(data.get("duration", 0.0))
         self.download_size: int = int(data.get("download_size", 0))
         self.http_status: int | None = data.get("http_status")

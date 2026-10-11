@@ -4,7 +4,8 @@ import json
 import os
 import time
 import urllib.parse
-from typing import Any, Tuple, Sequence, AsyncIterator, TYPE_CHECKING
+from dataclasses import dataclass
+from typing import Any, Literal, Sequence, AsyncIterator, TYPE_CHECKING
 
 import requests
 
@@ -15,6 +16,23 @@ _DEFAULT_HOST = urllib.parse.urlparse(DEFAULT_BASE).hostname or "cloud.thumbrell
 
 if TYPE_CHECKING:
     import aiohttp
+
+
+@dataclass(frozen=True)
+class ConnectConfig:
+    """Parsed connect string.
+
+    Attributes:
+        base_url: Server base URL, without a trailing slash.
+        host: Host and port, used for logging and backoff tracking.
+        source: Where the connect string came from. One of ``"argument"``,
+            ``"env"``, or ``"default"``. This is used to explain misconfig-
+            urations in terms that match how the user set it up.
+    """
+
+    base_url: str
+    host: str
+    source: Literal["argument", "env", "default"]
 
 def _is_auth_token(value: str) -> bool:
     """True when a value looks like a Thumbrella auth token (`tbr_[a-z]_` prefix)."""
@@ -29,16 +47,32 @@ def _is_auth_token(value: str) -> bool:
 def parse_connect(
     connect: str | None,
     session: requests.Session,
-) -> Tuple[str, str]:
-    """Parse a connect string into a session object."""
-    if connect is None:
-        connect = os.environ.get("TBR_CONNECT", DEFAULT_BASE)
+) -> ConnectConfig:
+    """Parse a connect string into a session object.
+
+    When ``connect`` is ``None`` or empty this falls back to the
+    ``$TBR_CONNECT`` environment variable, then to the Thumbrella Cloud
+    default. The returned :class:`ConnectConfig` records which of these was
+    used so callers can produce errors that match the user's setup.
+    """
+    source: Literal["argument", "env", "default"]
+    if connect:
+        source = "argument"
+    else:
+        # Fall back to `$TBR_CONNECT`, then the Thumbrella Cloud default.
+        env = os.environ.get("TBR_CONNECT")
+        if env:
+            connect = env
+            source = "env"
+        else:
+            connect = DEFAULT_BASE
+            source = "default"
 
     # Bare value, no scheme.  Only auth tokens are valid without a URL.
     if "://" not in connect:
         if _is_auth_token(connect):
             session.headers["Authorization"] = f"Bearer {connect}"
-            return DEFAULT_BASE, f"{_DEFAULT_HOST}:0"
+            return ConnectConfig(DEFAULT_BASE, f"{_DEFAULT_HOST}:0", source)
         raise ValueError(
             "bare connect string without a URL must be an auth token "
             "(tbr_?_...)"
@@ -64,7 +98,7 @@ def parse_connect(
         else:
             session.headers["x-tbr-handshake"] = segment
 
-    return base, host
+    return ConnectConfig(base, host, source)
 
 
 def requests_json(

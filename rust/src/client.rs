@@ -387,10 +387,12 @@ impl Client {
                 }));
             }
 
+            let request_url = resp.url().clone();
             let batch: BatchResponse =
                 resp.json().await.map_err(|e| Error::Http(code, e.to_string()))?;
 
-            for item in batch.items {
+            for mut item in batch.items {
+                item.resolve_pin(&request_url).map_err(|e| Error::Http(code, e))?;
                 for cache in &self.caches {
                     cache.put(&item.media);
                 }
@@ -496,6 +498,7 @@ impl Client {
                         continue;
                     }
 
+                    let request_url = resp.url().clone();
                     // Read the NDJSON response body incrementally, yielding
                     // each result as its line arrives.
                     let mut buf: Vec<u8> = Vec::new();
@@ -514,7 +517,7 @@ impl Client {
                                 continue;
                             }
                             if let Ok(result) = serde_json::from_str::<ResultData>(text)
-                                && let Some(r) = self.finish_stream_result(result, &mut pending) {
+                                && let Some(r) = self.finish_stream_result(result, &mut pending, &request_url) {
                                     yield r;
                             }
                         }
@@ -526,7 +529,7 @@ impl Client {
                         let text = text.trim();
                         if !text.is_empty()
                             && let Ok(result) = serde_json::from_str::<ResultData>(text)
-                            && let Some(r) = self.finish_stream_result(result, &mut pending) {
+                            && let Some(r) = self.finish_stream_result(result, &mut pending, &request_url) {
                                 yield r;
                         }
                     }
@@ -614,11 +617,18 @@ impl Client {
     /// in the attached caches, and returns the result to yield.
     fn finish_stream_result(
         &self,
-        result: ResultData,
+        mut result: ResultData,
         pending: &mut HashSet<String>,
+        request_url: &reqwest::Url,
     ) -> Option<ResultData> {
         if result.url.is_empty() {
             return None;
+        }
+        if let Err(e) = result.resolve_pin(request_url) {
+            pending.remove(&result.url);
+            result.set_client_error(&e);
+            result.pin = None;
+            return Some(result);
         }
         if result.status != status::INTERMEDIATE {
             pending.remove(&result.url);

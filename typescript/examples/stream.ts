@@ -24,7 +24,7 @@ function report(start: number, idx: string, result: Result): void {
     : "<nomedia>";
   console.log(
     `${((Date.now() - start)).toLocaleString()}ms ${idx}` +
-    ` - ${result.status} ${kind} ${result.source ?? ""} ${result.message ?? ""}`,
+    ` - ${result.status} ${kind} ${result.source ?? ""} ${result.message ?? ""} pin=${result.pin}`,
   );
 }
 

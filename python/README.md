@@ -105,6 +105,7 @@ result.source      # "render" | "cache" | "fallback" | "placeholder" | ...
 result.media       # Media | None — None when thumbnail could not be generated
 result.duration    # float — server processing time (ms)
 result.message     # str — error or informational message
+result.pin         # str | None — reusable url to fetch thumbnail contents
 
 result.is_success()  # True for SUCCESS or INTERMEDIATE
 result.is_fresh()    # True when the server freshly rendered (not from cache)

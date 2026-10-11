@@ -78,6 +78,58 @@ for await (const result of tbr.stream(mediaUrls)) {
 }
 ```
 
+## Result and media
+
+### Result
+
+```ts
+result.url           // string - the requested URL
+result.status        // "success" | "failed" | "overloaded" | "intermediate" | ...
+result.source        // string | null - "render" | "cache" | "fallback" | "placeholder" | ...
+result.media         // Media | null - source metadata and thumbnail, when available
+result.duration      // number - server processing time (ms)
+result.downloadSize  // number - bytes downloaded while processing
+result.httpStatus    // number | null - source HTTP status, when available
+result.message       // string | null - error or informational message
+result.pin           // string | null - absolute URL to fetch the pinned JPEG
+result.raw           // Record<string, unknown> - raw server result
+
+result.isSuccess()   // true when status is "success"
+result.isFresh()     // true when the media cache token has not expired
+result.verify()      // returns this on success, throws ThumbError on failure
+```
+
+The client resolves `pin` against the HTTP request URL. It remains `null` when
+pinning is unavailable or an older server omits the field.
+
+See the [result documentation](https://thumbrella.dev/docs/client/#result)
+for more details.
+
+### Media
+
+```ts
+media.url          // string - the original media URL
+media.mime         // string - "image/jpeg" | "application/pdf" | ...
+media.kind         // string - "image" | "video" | "document" | "geometry" | ...
+media.extension    // string - canonical extension without a dot
+media.fileSize     // number - original file size in bytes (0 if unknown)
+media.properties   // Record<string, number> - optional format-specific metadata
+media.thumbnail    // EncodedJpeg - the thumbnail JPEG payload
+media.cache        // string - opaque cache token used for revalidation
+media.placeholder  // string - placeholder identifier, or empty for a real thumbnail
+```
+
+See the [media documentation](https://thumbrella.dev/docs/client/#media)
+for more details.
+
+### EncodedJpeg
+
+```ts
+jpeg.bytes         // Uint8Array - base64-decoded JPEG bytes (lazy, cached)
+jpeg.length        // number - byte count
+jpeg.key           // number - content hash, useful for deduplication
+```
+
 ## Module Structure
 
 | Import                               | Contents                                     |
@@ -117,4 +169,3 @@ configure your own server or Cloud token for production applications.
 ## License
 
 Apache-2.0. See [LICENSE](https://github.com/thumbrella-dev/clients/blob/main/LICENSE).
-

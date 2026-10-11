@@ -280,6 +280,8 @@ export class Result {
   status: string;
   message: string | null;
   source: string | null;
+  /** Absolute pinned JPEG URL after client resolution, or null when unavailable. */
+  pin: string | null;
   duration: number;
   downloadSize: number;
   httpStatus: number | null;
@@ -291,6 +293,7 @@ export class Result {
     this.status = (data.status as string) ?? Status.UNAVAILABLE;
     this.message = (data.message as string) ?? null;
     this.source = (data.source as string) ?? null;
+    this.pin = (data.pin as string) ?? null;
     this.duration = (data.duration as number) ?? 0;
     this.downloadSize = (data.download_size as number) ?? 0;
     this.httpStatus = (data.http_status as number) ?? null;

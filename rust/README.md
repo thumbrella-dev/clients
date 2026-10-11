@@ -91,6 +91,64 @@ async fn main() -> Result<(), thumbrella::Error> {
 }
 ```
 
+## Result and media
+
+### ResultData
+
+```rust
+result.url           // String - the requested URL
+result.status        // String - "success" | "failed" | "overloaded" | "intermediate" | ...
+result.source        // Option<String> - "render" | "cache" | "fallback" | "placeholder" | ...
+result.media         // Media - source metadata and thumbnail, including failure placeholders
+result.duration      // f64 - server processing time (ms)
+result.download_size // u64 - bytes downloaded while processing
+result.http_status   // Option<u16> - source HTTP status, when available
+result.message       // Option<String> - error or informational message
+result.pin           // Option<String> - absolute URL to fetch the pinned JPEG
+result.raw           // serde_json::Value - raw JSON storage; Null unless populated
+
+result.is_success()  // true when status is "success"
+result.is_fresh()    // true when the media cache token has not expired
+```
+
+The client resolves `pin` against the HTTP request URL. It remains `None` when
+pinning is unavailable or an older server omits the field. Unlike the Python
+and TypeScript clients, `media` is not optional: missing or null media uses
+a default failure placeholder. Use `Client::thumb()` to return an error for
+an unsuccessful result; `ResultData` has no `verify()` method.
+
+See the [result documentation](https://thumbrella.dev/docs/client/#result)
+for more details.
+
+### Media
+
+```rust
+media.url          // String - the original media URL
+media.mime         // String - "image/jpeg" | "application/pdf" | ...
+media.kind         // String - "image" | "video" | "document" | "geometry" | ...
+media.extension    // String - canonical extension without a dot
+media.file_size    // u64 - original file size in bytes (0 if unknown)
+media.properties   // serde_json::Value - optional format-specific metadata
+media.thumbnail    // Thumbnail - the thumbnail JPEG payload
+media.cache        // String - opaque cache token used for revalidation
+media.placeholder  // String - placeholder identifier, or empty for a real thumbnail
+```
+
+See the [media documentation](https://thumbrella.dev/docs/client/#media)
+for more details.
+
+### Thumbnail
+
+```rust
+jpeg.bytes()       // &[u8] - raw JPEG bytes
+jpeg.reader()      // std::io::Cursor<&[u8]> - zero-copy, seekable reader
+jpeg.len()         // usize - byte count
+jpeg.is_empty()    // bool - whether the payload is empty
+jpeg.key()         // u64 - content hash, useful for deduplication
+```
+
+Cloning a `Thumbnail` shares its JPEG bytes rather than copying the payload.
+
 ## Image libraries
 
 The JPEG payload is a plain `&[u8]`, so it loads into common image libraries

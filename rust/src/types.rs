@@ -306,7 +306,7 @@ pub struct ResultData {
     pub http_status: Option<u16>,
     #[serde(default)]
     pub source: Option<String>,
-    /// Relative server URL for the pinned JPEG, or None when unavailable.
+    /// Absolute pinned JPEG URL after client resolution, or None when unavailable.
     #[serde(default)]
     pub pin: Option<String>,
     #[serde(default, deserialize_with = "deserialize_media_or_default")]
@@ -325,6 +325,14 @@ where
 }
 
 impl ResultData {
+    pub(crate) fn resolve_pin(&mut self, request_url: &reqwest::Url) -> Result<(), String> {
+        if let Some(pin) = &self.pin {
+            self.pin =
+                Some(request_url.join(pin).map_err(|e| format!("invalid pin URL: {e}"))?.to_string());
+        }
+        Ok(())
+    }
+
     pub fn new(url: String) -> Self {
         let media = Media::failed(&url);
         Self {
@@ -396,6 +404,22 @@ mod tests {
                 .unwrap();
         assert!(old.pin.is_none());
         assert!(ResultData::new("https://example.com/image.jpg".into()).pin.is_none());
+    }
+
+    #[test]
+    fn pins_resolve_against_request_url() {
+        let request = reqwest::Url::parse("https://server.test/api/batch").unwrap();
+        for (pin, expected) in [
+            (Some("pin/i123456789012.jpeg"), Some("https://server.test/api/pin/i123456789012.jpeg")),
+            (Some("/pin/i123456789012.jpeg"), Some("https://server.test/pin/i123456789012.jpeg")),
+            (Some("https://other.test/pin.jpeg"), Some("https://other.test/pin.jpeg")),
+            (None, None),
+        ] {
+            let mut result = ResultData::new("https://media.test/image.jpeg".into());
+            result.pin = pin.map(str::to_owned);
+            result.resolve_pin(&request).unwrap();
+            assert_eq!(result.pin.as_deref(), expected);
+        }
     }
 
     #[test]

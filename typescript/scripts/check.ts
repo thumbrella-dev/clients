@@ -83,13 +83,11 @@ function printResult(r: Result): void {
   ].filter(Boolean).join("  ");
   console.log(`  ${resultLine}`);
 
-  if (r.httpStatus != null || r.message) {
-    const parts = [
-      r.httpStatus != null ? kv("http_status", String(r.httpStatus)) : null,
-      r.message ? kv("message", r.message) : null,
-    ].filter(Boolean).join("  ");
-    console.log(`  ${parts}`);
-  }
+  const parts = [
+    r.httpStatus != null ? kv("http_status", String(r.httpStatus)) : null,
+    r.message !== null ? kv("message", r.message) : kv("pin", r.pin ?? ""),
+  ].filter(Boolean).join("  ");
+  console.log(`  ${parts}`);
 
   const m = r.media;
   if (m) {

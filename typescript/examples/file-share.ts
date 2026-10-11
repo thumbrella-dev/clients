@@ -115,6 +115,7 @@ async function thumbnailAndSave(publicUrl: string, outputAbs: string): Promise<v
     `(${result.media.fileSize?.toLocaleString() ?? "?"} bytes original)`,
   );
   console.error(`  time   : ${result.duration?.toFixed(0) ?? "?"} ms`);
+  console.error(`  pin    : ${result.pin}`);
 }
 
 //  main 
@@ -174,4 +175,3 @@ main().catch((err) => {
   console.error(err.message);
   process.exit(1);
 });
-
