@@ -57,7 +57,7 @@ pub enum Error {
     Http(u16, String),
 }
 
-//  Thumbnail 
+//  Thumbnail
 
 /// Binary JPEG thumbnail data.
 ///
@@ -152,15 +152,16 @@ impl AsRef<[u8]> for Thumbnail {
 impl From<Vec<u8>> for Thumbnail {
     fn from(data: Vec<u8>) -> Self {
         let hash = Self::hash_bytes(&data);
-        Self { data: Arc::new(data), hash }
+        Self {
+            data: Arc::new(data),
+            hash,
+        }
     }
 }
 
 impl From<String> for Thumbnail {
     fn from(b64: String) -> Self {
-        base64::engine::general_purpose::STANDARD
-            .decode(&b64).unwrap_or_default()
-            .into()
+        base64::engine::general_purpose::STANDARD.decode(&b64).unwrap_or_default().into()
     }
 }
 
@@ -182,7 +183,7 @@ impl std::fmt::Debug for Thumbnail {
     }
 }
 
-//  Media 
+//  Media
 
 /// Data from the [`ResultData`] that describes the source media.
 ///
@@ -242,7 +243,10 @@ impl Media {
     /// The thumbnail is the shared placeholder JPEG, so every result carries an
     /// image even when no server was contacted.
     pub fn failed(url: &str) -> Self {
-        Self { url: url.to_string(), ..Self::default() }
+        Self {
+            url: url.to_string(),
+            ..Self::default()
+        }
     }
 
     pub fn is_fresh(&self) -> bool {
@@ -302,6 +306,9 @@ pub struct ResultData {
     pub http_status: Option<u16>,
     #[serde(default)]
     pub source: Option<String>,
+    /// Relative server URL for the pinned JPEG, or None when unavailable.
+    #[serde(default)]
+    pub pin: Option<String>,
     #[serde(default, deserialize_with = "deserialize_media_or_default")]
     pub media: Media,
     /// Raw server JSON.
@@ -328,6 +335,7 @@ impl ResultData {
             message: None,
             http_status: None,
             source: Some(source::CLIENT.to_string()),
+            pin: None,
             media,
             raw: serde_json::Value::Null,
         }
@@ -360,12 +368,35 @@ pub(crate) struct BatchResponse {
 pub(crate) struct HealthResponse {
     #[serde(default)]
     pub status: String,
+    /// Only present on Thumbrella Cloud. `Some(false)` means the token was
+    /// rejected, `None` means a standalone server that does not require one.
+    #[serde(default)]
+    pub token: Option<bool>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::{Read, Seek, SeekFrom};
+
+    #[test]
+    fn result_pin_is_optional_and_preserved_from_server_json() {
+        for (pin, expected) in [
+            (serde_json::Value::Null, None),
+            (serde_json::json!("pin/i123456789012.jpeg"), Some("pin/i123456789012.jpeg")),
+        ] {
+            let result: ResultData = serde_json::from_value(serde_json::json!({
+                "url": "https://example.com/image.jpg", "pin": pin,
+            }))
+            .unwrap();
+            assert_eq!(result.pin.as_deref(), expected);
+        }
+        let old: ResultData =
+            serde_json::from_value(serde_json::json!({"url": "https://example.com/image.jpg"}))
+                .unwrap();
+        assert!(old.pin.is_none());
+        assert!(ResultData::new("https://example.com/image.jpg".into()).pin.is_none());
+    }
 
     #[test]
     fn reader_is_zero_copy_and_seekable() {

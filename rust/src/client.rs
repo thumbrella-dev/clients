@@ -24,15 +24,18 @@ struct Backoff {
 
 impl Backoff {
     fn new() -> Self {
-        Self { hosts: Mutex::new(HashMap::new()) }
+        Self {
+            hosts: Mutex::new(HashMap::new()),
+        }
     }
 
     fn check(&self, host: &str) -> Result<(), Error> {
         let map = self.hosts.lock().unwrap();
         if let Some(&(until, _)) = map.get(host)
-            && std::time::Instant::now() < until {
-                return Err(Error::Connection(format!("{host} is throttled, retry later")));
-            }
+            && std::time::Instant::now() < until
+        {
+            return Err(Error::Connection(format!("{host} is throttled, retry later")));
+        }
         Ok(())
     }
 
@@ -50,10 +53,22 @@ impl Backoff {
 
 //  connect string parsing
 
+/// Where the effective connect string came from.
+#[derive(Clone, Copy)]
+enum ConnectSource {
+    /// Passed explicitly to the `Client` constructor.
+    Argument,
+    /// Read from the `$TBR_CONNECT` environment variable.
+    Env,
+    /// Nothing was set, so the Thumbrella Cloud default is used.
+    Default,
+}
+
 struct ConnectConfig {
     base_url: String,
     host: String,
     headers: HashMap<String, String>,
+    source: ConnectSource,
 }
 
 fn is_auth_token(s: &str) -> bool {
@@ -63,18 +78,17 @@ fn is_auth_token(s: &str) -> bool {
 
 /// Extract host from a URL like "https://cloud.thumbrella.dev".
 fn host_from_url(url: &str) -> &str {
-    url.split("://")
-        .nth(1)
-        .unwrap_or("")
-        .split('/')
-        .next()
-        .unwrap_or("")
+    url.split("://").nth(1).unwrap_or("").split('/').next().unwrap_or("")
 }
 
 fn parse_connect(connect: Option<&str>) -> ConnectConfig {
-    let raw: String = connect.map(String::from)
-        .or_else(|| std::env::var("TBR_CONNECT").ok())
-        .unwrap_or_else(|| DEFAULT_BASE.to_string());
+    let (raw, source) = match connect {
+        Some(s) if !s.is_empty() => (s.to_string(), ConnectSource::Argument),
+        _ => match std::env::var("TBR_CONNECT") {
+            Ok(env) if !env.is_empty() => (env, ConnectSource::Env),
+            _ => (DEFAULT_BASE.to_string(), ConnectSource::Default),
+        },
+    };
 
     // Bare value, no scheme.  Only auth tokens are valid without a URL.
     if !raw.contains("://") {
@@ -85,6 +99,7 @@ fn parse_connect(connect: Option<&str>) -> ConnectConfig {
                 base_url: DEFAULT_BASE.into(),
                 host: host_from_url(DEFAULT_BASE).to_string(),
                 headers,
+                source,
             };
         }
         // Bare non-auth values are not valid connect strings.
@@ -92,6 +107,7 @@ fn parse_connect(connect: Option<&str>) -> ConnectConfig {
             base_url: DEFAULT_BASE.into(),
             host: host_from_url(DEFAULT_BASE).to_string(),
             headers: HashMap::new(),
+            source,
         };
     }
 
@@ -112,10 +128,15 @@ fn parse_connect(connect: Option<&str>) -> ConnectConfig {
         }
     }
 
-    ConnectConfig { base_url, host, headers }
+    ConnectConfig {
+        base_url,
+        host,
+        headers,
+        source,
+    }
 }
 
-//  Client 
+//  Client
 
 /// Thumbrella API client, async-first.
 ///
@@ -155,6 +176,8 @@ pub struct Client {
     stream_http: HttpClient,
     caches: Vec<Box<dyn Cache>>,
     backoff: Backoff,
+    connect_source: ConnectSource,
+    has_auth: bool,
 }
 
 impl Client {
@@ -166,6 +189,7 @@ impl Client {
     /// Create a client with custom caches. Pass an empty vec for no caching.
     pub fn with_caches(connect: Option<&str>, caches: Vec<Box<dyn Cache>>) -> Self {
         let cfg = parse_connect(connect);
+        let has_auth = cfg.headers.keys().any(|k| k.eq_ignore_ascii_case("Authorization"));
         let mut default_headers = reqwest::header::HeaderMap::new();
         default_headers.insert(
             reqwest::header::USER_AGENT,
@@ -203,6 +227,8 @@ impl Client {
                 .expect("reqwest stream client"),
             caches,
             backoff: Backoff::new(),
+            connect_source: cfg.source,
+            has_auth,
         }
     }
 
@@ -236,20 +262,47 @@ impl Client {
     ///
     /// Returns `Ok(())` on success.
     pub async fn verify(&self) -> Result<(), Error> {
-        let path = if self.base_url == DEFAULT_BASE { "/token" } else { "/health" };
-        let resp = self.request("GET", path).send().await.map_err(|e| {
-            Error::Connection(format!("{}: {e}", self.base_url))
-        })?;
+        let resp = self
+            .request("GET", "/health")
+            .send()
+            .await
+            .map_err(|e| Error::Connection(format!("{}: {e}", self.base_url)))?;
         let code = resp.status().as_u16();
         self.backoff.record(&self.host, code == 429 || code == 503);
 
-        let data: HealthResponse = resp.json().await.map_err(|e| {
-            Error::Http(code, e.to_string())
-        })?;
+        let data: HealthResponse = resp.json().await.map_err(|e| Error::Http(code, e.to_string()))?;
         if data.status != "ok" {
             return Err(Error::Verify(format!("unexpected response: {data:?}")));
         }
+        if data.token == Some(false) {
+            return Err(Error::Verify(self.missing_token_message()));
+        }
         Ok(())
+    }
+
+    /// Explain why a token is missing, based on where the connect string came
+    /// from.  This points at the actual problem and how to fix it, instead of
+    /// a bare "requires a token" message.
+    fn missing_token_message(&self) -> String {
+        if self.has_auth {
+            return "Thumbrella connect token is invalid".to_string();
+        }
+        match self.connect_source {
+            ConnectSource::Default => concat!(
+                "Connection string $TBR_CONNECT is not defined ",
+                "(set to server URL or Thumbrella Cloud token)",
+            )
+            .to_string(),
+            ConnectSource::Env => concat!(
+                "Connection string $TBR_CONNECT does not include a token ",
+                "(Thumbrella Cloud requires one)",
+            )
+            .to_string(),
+            ConnectSource::Argument => {
+                concat!("Connect string does not include a token ", "(Thumbrella Cloud requires one)",)
+                    .to_string()
+            }
+        }
     }
 
     /// Get a single URL result and fail if unsuccessful.
@@ -306,7 +359,8 @@ impl Client {
         // Split into server-sized chunks.
         for chunk in stale_items.chunks(BATCH_MAX_ITEMS) {
             let body = serde_json::json!({ "items": chunk });
-            let resp = match self.request("POST", "/batch")
+            let resp = match self
+                .request("POST", "/batch")
                 .header("Accept", "application/json")
                 .json(&body)
                 .send()
@@ -333,9 +387,8 @@ impl Client {
                 }));
             }
 
-            let batch: BatchResponse = resp.json().await.map_err(|e| {
-                Error::Http(code, e.to_string())
-            })?;
+            let batch: BatchResponse =
+                resp.json().await.map_err(|e| Error::Http(code, e.to_string()))?;
 
             for item in batch.items {
                 for cache in &self.caches {
@@ -381,10 +434,7 @@ impl Client {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn stream<'a, 'u>(
-        &'a self,
-        urls: &'u [&'u str],
-    ) -> impl Stream<Item = ResultData> + 'u
+    pub fn stream<'a, 'u>(&'a self, urls: &'u [&'u str]) -> impl Stream<Item = ResultData> + 'u
     where
         'a: 'u,
     {
@@ -493,7 +543,7 @@ impl Client {
         }
     }
 
-    //  helpers 
+    //  helpers
 
     fn collect_results<F>(
         &self,
@@ -504,9 +554,7 @@ impl Client {
     where
         F: Fn(&str) -> ResultData,
     {
-        urls.iter()
-            .map(|&u| done.get(u).cloned().unwrap_or_else(|| fallback(u)))
-            .collect()
+        urls.iter().map(|&u| done.get(u).cloned().unwrap_or_else(|| fallback(u))).collect()
     }
 
     /// Check caches and validate URLs, without making any server calls.
@@ -514,10 +562,7 @@ impl Client {
     /// Returns `(done, stale)`: `done` maps each URL resolved locally (invalid
     /// URL or fresh cache entry) to its result, and `stale` holds the request
     /// items that still need a server call.
-    fn preflight(
-        &self,
-        urls: &[&str],
-    ) -> (HashMap<String, ResultData>, Vec<serde_json::Value>) {
+    fn preflight(&self, urls: &[&str]) -> (HashMap<String, ResultData>, Vec<serde_json::Value>) {
         let mut done: HashMap<String, ResultData> = HashMap::new();
         let mut stale_items: Vec<serde_json::Value> = Vec::new();
 
@@ -533,15 +578,16 @@ impl Client {
             let mut fresh = false;
             for cache in &self.caches {
                 if let Some(cached) = cache.get(url)
-                    && cached.is_fresh() {
-                        let mut r = ResultData::new(url.to_string());
-                        r.status = status::SUCCESS.to_string();
-                        r.source = Some(source::CACHE.to_string());
-                        r.media = cached.clone();
-                        done.insert(url.to_string(), r);
-                        fresh = true;
-                        break;
-                    }
+                    && cached.is_fresh()
+                {
+                    let mut r = ResultData::new(url.to_string());
+                    r.status = status::SUCCESS.to_string();
+                    r.source = Some(source::CACHE.to_string());
+                    r.media = cached.clone();
+                    done.insert(url.to_string(), r);
+                    fresh = true;
+                    break;
+                }
             }
             if fresh {
                 continue;
@@ -549,7 +595,9 @@ impl Client {
 
             let mut item = serde_json::json!({ "url": url });
             for cache in &self.caches {
-                if let Some(cached) = cache.get(url) && !cached.cache.is_empty() {
+                if let Some(cached) = cache.get(url)
+                    && !cached.cache.is_empty()
+                {
                     item["cache"] = serde_json::Value::String(cached.cache.clone());
                     break;
                 }
@@ -581,22 +629,13 @@ impl Client {
         Some(result)
     }
 
-    fn build_request(
-        &self,
-        client: &HttpClient,
-        method: &str,
-        path: &str,
-    ) -> reqwest::RequestBuilder {
+    fn build_request(&self, client: &HttpClient, method: &str, path: &str) -> reqwest::RequestBuilder {
         let url = format!("{}{path}", self.base_url);
         client.request(method.parse().unwrap(), &url)
     }
 
     /// Low-level HTTP request builder (bounded total timeout).
-    pub fn request(
-        &self,
-        method: &str,
-        path: &str,
-    ) -> reqwest::RequestBuilder {
+    pub fn request(&self, method: &str, path: &str) -> reqwest::RequestBuilder {
         self.build_request(&self.http, method, path)
     }
 

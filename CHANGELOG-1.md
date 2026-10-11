@@ -4,7 +4,8 @@
 
 - Update typescript to 7  /typescript
 - Attestation for bundled js  /typescript
-- Fix intermediate stream tracking for Typescript  /typescript
+- Fix intermediate stream tracking  /typescript
+- Improve connection errors with verify  /typescript /python /rust
 
 ## 1.4.0 - 2026/08/21
 

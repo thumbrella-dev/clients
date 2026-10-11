@@ -102,9 +102,10 @@ impl Cache for MemoryCache {
         if store.contains_key(&url) {
             order.retain(|u| u != &url);
         } else if store.len() >= self.max_items
-            && let Some(stale) = order.pop() {
-                store.remove(&stale);
-            }
+            && let Some(stale) = order.pop()
+        {
+            store.remove(&stale);
+        }
         store.insert(url.clone(), media.clone());
         order.insert(0, url);
     }
