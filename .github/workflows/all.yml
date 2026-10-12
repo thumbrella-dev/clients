@@ -25,16 +25,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Dispatch npm publish
-        run: gh workflow run npmjs.yaml -f ref="${{ github.event.inputs.ref }}"
+        run: gh workflow run npmjs.yml -f ref="${{ github.event.inputs.ref }}"
         env:
           GH_TOKEN: ${{ github.token }}
 
       - name: Dispatch PyPI publish
-        run: gh workflow run pypi.yaml -f ref="${{ github.event.inputs.ref }}"
+        run: gh workflow run pypi.yml -f ref="${{ github.event.inputs.ref }}"
         env:
           GH_TOKEN: ${{ github.token }}
 
       - name: Dispatch crates.io publish
-        run: gh workflow run crates.yaml -f ref="${{ github.event.inputs.ref }}"
+        run: gh workflow run crates.yml -f ref="${{ github.event.inputs.ref }}"
         env:
           GH_TOKEN: ${{ github.token }}

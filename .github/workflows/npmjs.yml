@@ -10,7 +10,7 @@ name: Publish npm (@thumbrella/client)
 # Register the package on npmjs.com under Settings > Trusted publishing with:
 #   owner/organization: thumbrella-dev
 #   repository:         clients
-#   workflow filename:  npmjs.yaml
+#   workflow filename:  npmjs.yml
 #   environment name:   npm
 # Provenance attestations are generated automatically (no --provenance flag).
 

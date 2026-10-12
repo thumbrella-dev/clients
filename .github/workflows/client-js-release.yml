@@ -6,7 +6,7 @@ name: Release client JS bundle
 # Manual trigger only. Pass any git ref (branch, tag, or commit SHA); the
 # version is read from typescript/package.json at that ref.
 #
-# Run AFTER the npm publish (npmjs.yaml) so the version's tarball is on the
+# Run AFTER the npm publish (npmjs.yml) so the version's tarball is on the
 # registry: release-stage.ts rebuilds the bundle from that tarball with the
 # shared, minified esbuild options, so the released bytes are deterministic and
 # equal to what the CDN staging (build-cdn.ts) serves for the version.
