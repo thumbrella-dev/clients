@@ -5,8 +5,12 @@ name: Publish crates.io (thumbrella-client)
 # Manual trigger only. Pass any git ref (branch, tag, or commit SHA); the
 # version is read from rust/Cargo.toml at that ref.
 #
-# crates.io has no trusted publishing yet, so a publish-only token scoped to
-# this one crate lives in the "crates" environment.
+# Auth: crates.io trusted publishing (OIDC), with no stored registry token.
+# Configure the crate's trusted publisher with:
+#   owner/organization: thumbrella-dev
+#   repository:         clients
+#   workflow filename:  crates.yml
+#   environment name:   crates
 
 on:
   workflow_dispatch:
@@ -18,6 +22,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: publish-crates-${{ github.event.inputs.ref }}
@@ -39,7 +44,13 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
       # cargo publish verifies, packages, and uploads in one step. The version
       # comes from rust/Cargo.toml, which must already be bumped.
       - name: Publish to crates.io
-        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
