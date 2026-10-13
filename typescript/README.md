@@ -51,7 +51,7 @@ npm install @thumbrella/client
 
 For a static web page, import directly from the CDN and avoid the
 npm operations with
-`import { tbrSetup } from "https://js.thumbrella.dev/1.4/tbr.js";`
+`import { tbrSetup } from "https://js.thumbrella.dev/2.0/tbr.js";`
 
 The `tbrSetup` call registers `<tbr-thumb>` and configures its loading states,
 placeholders, caching, and lazy loading.
