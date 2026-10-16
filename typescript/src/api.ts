@@ -299,7 +299,6 @@ export class Client {
         body,
         signal: controller.signal,
       });
-      clearTimeout(timeoutId);
 
       recordBackoff(host, resp.status === 429 || resp.status === 503);
 
@@ -357,8 +356,9 @@ export class Client {
       clearTimeout(timeoutId);
     }
 
+    const reason = controller.signal.aborted ? "request timed out" : "stream connection lost";
     for (const url of pending) {
-      yield Result.clientFail(url, "stream connection lost");
+      yield Result.clientFail(url, reason);
     }
   }
 

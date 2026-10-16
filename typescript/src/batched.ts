@@ -96,14 +96,24 @@ function createAsyncQueue<T>(): {
   };
 }
 
+/** Default number of thumbnails a {@link BatchedClient} keeps in flight. */
+export const BATCH_LIMIT = 12;
+
 /**
  * A {@link Client} wrapper that coalesces individual
  * {@link streamUrl} calls into batched HTTP requests.
  *
  * URLs submitted within the same microtask/macrotask boundary are
- * queued together and dispatched as a single `/batch` call.  Each
- * call site receives an independent `AsyncGenerator` that yields only
- * results for its own URL.
+ * queued together and dispatched as `/batch` calls.  Each call site
+ * receives an independent `AsyncGenerator` that yields only results
+ * for its own URL.
+ *
+ * At most `limit` thumbnails are in flight at once, but they need not
+ * share a request: each final result frees a slot, and a new batch is
+ * sent once enough slots are free.  "Enough" starts at `limit` right
+ * after a send and drops by one per second, so a few slow outliers
+ * delay the next batch by at most `limit` seconds and an idle client
+ * always sends immediately.
  *
  * ```ts
  * const bc = getBatchedClient("https://thumbrella.dev/api");
@@ -114,14 +124,17 @@ function createAsyncQueue<T>(): {
  */
 export class BatchedClient {
   readonly #client: Client;
-  #pending = new Map<
-    string,
-    ReturnType<typeof createAsyncQueue<Result>>
-  >();
+  readonly limit: number;
+  /** Every unfinished URL, queued or in flight. */
+  #active = new Map<string, ReturnType<typeof createAsyncQueue<Result>>>();
+  #queue: string[] = [];
+  #inflight = 0;
+  #lastSend = 0;
   #timer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(client: Client) {
+  constructor(client: Client, opts: { limit?: number } = {}) {
     this.#client = client;
+    this.limit = opts.limit ?? BATCH_LIMIT;
   }
 
   /** The underlying (unbatched) {@link Client}. */
@@ -132,57 +145,76 @@ export class BatchedClient {
   /**
    * Stream results for a single URL.
    *
-   * The URL is queued internally.  When the flush timer fires all
-   * queued URLs are submitted together via {@link Client.stream}.
+   * The URL is queued internally and sent with the next batch.
    * Results are routed back to the per-URL async generator returned
    * here.
    */
   streamUrl(url: string): AsyncIterableIterator<Result> {
-    const existing = this.#pending.get(url);
+    const existing = this.#active.get(url);
     if (existing) return existing.iter;
 
     const q = createAsyncQueue<Result>();
-    this.#pending.set(url, q);
-    this.#scheduleFlush();
+    this.#active.set(url, q);
+    this.#queue.push(url);
+    this.#schedule(0);
     return q.iter;
   }
 
-  #scheduleFlush(): void {
-    if (this.#timer !== null) return;
-    this.#timer = setTimeout(() => this.#flush(), 0);
+  #schedule(ms: number): void {
+    if (this.#timer !== null) clearTimeout(this.#timer);
+    this.#timer = setTimeout(() => this.#pump(), ms);
   }
 
-  async #flush(): Promise<void> {
+  /** Send a batch if enough slots are free, otherwise wake when they would be. */
+  #pump(): void {
+    if (this.#timer !== null) clearTimeout(this.#timer);
     this.#timer = null;
+    if (this.#queue.length === 0) return;
+    const free = this.limit - this.#inflight;
+    if (free <= 0) return; // a finishing item will pump again
+    if (this.#inflight > 0) {
+      const softMin = this.limit - (Date.now() - this.#lastSend) / 1000;
+      if (free < softMin) {
+        this.#schedule((softMin - free) * 1000);
+        return;
+      }
+    }
+    const batch = this.#queue.splice(0, free);
+    this.#inflight += batch.length;
+    this.#lastSend = Date.now();
+    void this.#run(batch);
+  }
 
-    const entries = [...this.#pending.entries()];
-    if (entries.length === 0) return;
-    this.#pending.clear();
-
-    const urlMap = new Map(entries);
+  async #run(batch: string[]): Promise<void> {
+    const open = new Set(batch);
+    const finish = (url: string, result?: Result): void => {
+      const q = this.#active.get(url);
+      if (result) q?.push(result);
+      q?.done();
+      this.#active.delete(url);
+      if (open.delete(url)) {
+        this.#inflight--;
+        this.#pump();
+      }
+    };
 
     try {
-      for await (const result of this.#client.stream(
-        entries.map(([u]) => u),
-      )) {
-        const q = urlMap.get(result.url);
-        if (!q) continue;
-        q.push(result);
-        if (result.status !== Status.INTERMEDIATE) {
-          q.done();
+      for await (const result of this.#client.stream(batch)) {
+        if (!open.has(result.url)) continue;
+        if (result.status === Status.INTERMEDIATE) {
+          this.#active.get(result.url)?.push(result);
+        } else {
+          finish(result.url, result);
         }
       }
     } catch {
-      for (const [url, q] of entries) {
-        q.push(Result.clientFail(url, "batch request failed"));
-        q.done();
+      for (const url of [...open]) {
+        finish(url, Result.clientFail(url, "batch request failed"));
       }
     }
 
-    // Safety net — ensure every queue is closed
-    for (const [, q] of entries) {
-      q.done();
-    }
+    // Safety net — ensure every item is released
+    for (const url of [...open]) finish(url);
   }
 }
 
