@@ -7,11 +7,22 @@
  */
 
 import { Client } from "./api.js";
+import type { ClientCache } from "./cache.js";
 import { Result, Status } from "./types.js";
 
 // Shared client
 
-let _sharedClient: Client | null = null;
+const _sharedClients = new Map<string, Client>();
+const _defaults: { connect?: string; caches?: ClientCache[] } = {};
+
+/** Update defaults used by shared clients, including already-created wrappers. */
+export function configureClients(opts: { connect?: string; caches?: ClientCache[] }): void {
+  if (opts.connect !== undefined) _defaults.connect = opts.connect;
+  if (opts.caches !== undefined) _defaults.caches = opts.caches;
+  if (opts.caches !== undefined) {
+    for (const client of _sharedClients.values()) client.setCaches(opts.caches);
+  }
+}
 
 /**
  * Get (or create) a shared Thumbrella {@link Client} for the page.
@@ -19,15 +30,20 @@ let _sharedClient: Client | null = null;
  * @param connect  Optional connect string (falls back to `window.TBR_CONNECT`).
  */
 export function getClient(connect?: string): Client {
-  if (!_sharedClient) {
-    _sharedClient = new Client({
-      connect: connect ??
+  const resolved = connect ?? _defaults.connect ??
         (typeof window !== "undefined"
           ? (window as unknown as Record<string, string>).TBR_CONNECT
-          : undefined),
+          : undefined);
+  const key = resolved ?? "";
+  let client = _sharedClients.get(key);
+  if (!client) {
+    client = new Client({
+      connect: resolved,
+      caches: _defaults.caches,
     });
+    _sharedClients.set(key, client);
   }
-  return _sharedClient;
+  return client;
 }
 
 // Batched client — coalesces individual URL requests into batch HTTP calls
@@ -188,7 +204,7 @@ export class BatchedClient {
 
 // Singleton batched clients (keyed by connect string)
 
-const _batchedClients = new Map<string, BatchedClient>();
+const _batchedClients = new Map<Client, BatchedClient>();
 
 /**
  * Get (or create) a shared {@link BatchedClient} for the page.
@@ -200,11 +216,11 @@ const _batchedClients = new Map<string, BatchedClient>();
  * @param connect  Optional connect string (falls back to `window.TBR_CONNECT`).
  */
 export function getBatchedClient(connect?: string): BatchedClient {
-  const key = connect || "__default__";
-  let bc = _batchedClients.get(key);
+  const client = getClient(connect);
+  let bc = _batchedClients.get(client);
   if (!bc) {
-    bc = new BatchedClient(getClient(connect));
-    _batchedClients.set(key, bc);
+    bc = new BatchedClient(client);
+    _batchedClients.set(client, bc);
   }
   return bc;
 }

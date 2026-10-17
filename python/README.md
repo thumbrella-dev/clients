@@ -155,6 +155,20 @@ examples.
 - [`examples/collage.py`](https://github.com/thumbrella-dev/clients/blob/main/python/examples/collage.py) 
   Assemble thumbnails from multiple sources into a single grid image.
 
+## Client cache keys
+
+HTTP(S) cache keys normalize the scheme and host and strip fragments and common
+authentication/signing query parameters, using the same credential-name policy
+as the TypeScript client. This includes tokens, signatures, expiry fields,
+AWS/GCS signing parameters, CloudFront credentials, and Azure SAS fields when
+`sig` is present. Other query parameters and their order are preserved, so
+different content variants remain separate. Local paths and non-HTTP URLs
+are unchanged.
+
+Only client cache keys are cleaned: requests still send the full original URL,
+and `result.url` remains the requested URL. Custom caches receive canonical
+lookup keys and canonical URLs on stored media copies.
+
 ## Servers
 
 This client works with any self-hosted Thumbrella server and also the online

@@ -1,6 +1,11 @@
 # Thumbrella Clients 1.x changelog
 
-## Development
+## Development 
+
+- Browser tbrSetup properly registers caches  /typescript
+- Use cleaned urls for cache lookups  /typescript /python /rust
+
+## 1.5.0 - 
 
 - Update typescript to 7  /typescript
 - Attestation for bundled js  /typescript

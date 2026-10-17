@@ -8,7 +8,7 @@ from typing import Any, AsyncIterator, Sequence
 
 import requests
 
-from .cache import Cache, MemoryCache, put_all_caches
+from .cache import Cache, MemoryCache, canonical_url, put_all_caches
 from .constants import DEFAULT_BASE, HTTP_TIMEOUT, Source, Status, BATCH_MAX_ITEMS
 from .result import Result, Media, EncodedJpeg
 from .errors import ConnectionError, TimeoutError, VerifyError, ThumbError
@@ -387,12 +387,13 @@ def _result_from_server(
 
     if result.pin is not None:
         result.pin = urljoin(request_url, result.pin)
-    put_all_caches(caches, result.media)
+    put_all_caches(caches, result.media, url)
     return result
 
 
 def _media_from_caches(url: str, caches: Sequence[Cache]) -> Media | None:
     """Return cached Media for *url*, or ``None``."""
+    url = canonical_url(url)
     for cache in caches:
         media = cache.get(url)
         if media is not None:
@@ -458,9 +459,10 @@ def _preflight_urls(
             continue
 
         # Check all caches for a fresh entry.
+        cache_url = canonical_url(url)
         fresh = False
         for cache in caches:
-            media = cache.get(url)
+            media = cache.get(cache_url)
             if media is not None and media.is_fresh():
                 data = {"url": url, "status": Status.SUCCESS, "source": Source.CLIENT}
                 done[url] = Result(data, media=media)
@@ -474,11 +476,10 @@ def _preflight_urls(
         # from any cached media so the server can do a conditional revalidation.
         item: dict[str, str] = {"url": url}
         for cache in caches:
-            media = cache.get(url)
+            media = cache.get(cache_url)
             if media is not None and media.cache:
                 item["cache"] = media.cache
                 break
         stale.append(item)
 
     return done, stale
-

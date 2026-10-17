@@ -35,8 +35,11 @@ async fn batch_and_stream_resolve_pins_and_accept_old_servers() {
                 assert!(read > 0);
                 request.extend_from_slice(&buf[..read]);
             }
+            let payload: serde_json::Value =
+                serde_json::from_slice(&request[header_end..header_end + length]).unwrap();
+            assert_eq!(payload["items"][0]["url"], "https://media.test/a?v=2&token=one#part");
             let items = [
-                serde_json::json!({"url": "https://media.test/a", "status": "success", "pin": "pin/i123456789012.jpeg"}),
+                serde_json::json!({"url": "https://media.test/a?v=2&token=one#part", "status": "success", "pin": "pin/i123456789012.jpeg"}),
                 serde_json::json!({"url": "https://media.test/b", "status": "success", "pin": null}),
                 serde_json::json!({"url": "https://media.test/c", "status": "success"}),
             ];
@@ -55,7 +58,7 @@ async fn batch_and_stream_resolve_pins_and_accept_old_servers() {
     });
     let client = Client::with_caches(Some(&format!("{base}/api")), vec![]);
     let urls = [
-        "https://media.test/a",
+        "https://media.test/a?v=2&token=one#part",
         "https://media.test/b",
         "https://media.test/c",
     ];
@@ -64,6 +67,7 @@ async fn batch_and_stream_resolve_pins_and_accept_old_servers() {
     pin_mut!(stream);
     let streamed: Vec<_> = stream.collect().await;
     for results in [batch, streamed] {
+        assert_eq!(results[0].url, urls[0]);
         assert_eq!(
             results[0].pin.as_deref(),
             Some(format!("{base}/api/pin/i123456789012.jpeg").as_str())

@@ -4,10 +4,52 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
+from copy import copy
 from typing import TYPE_CHECKING, Sequence
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 if TYPE_CHECKING:
     from .result import Media
+
+
+_AUTH_PARAMS = {
+    "auth", "authorization", "token", "access_token", "auth_token",
+    "api_key", "apikey", "signature", "sig", "credential", "security_token",
+    "expires", "expiry", "awsaccesskeyid", "googleaccessid", "policy", "key-pair-id",
+}
+_SAS_PARAMS = {
+    "sv", "ss", "srt", "sp", "se", "st", "spr", "sip", "sr", "si",
+    "skoid", "sktid", "skt", "ske", "sks", "skv", "saoid", "suoid", "scid",
+}
+
+
+def canonical_url(raw: str) -> str:
+    """HTTP cache key without fragments or signing parameters; never a request URL."""
+    if raw.partition("://")[0].lower() not in ("http", "https") or "://" not in raw:
+        return raw
+    try:
+        parts = urlsplit(raw)
+        host = parts.hostname
+        port = parts.port
+    except ValueError:
+        return raw
+    if not host:
+        return raw
+    if ":" in host:
+        host = f"[{host}]"
+    if port is not None and port != (443 if parts.scheme == "https" else 80):
+        host += f":{port}"
+    userinfo, separator, _ = parts.netloc.rpartition("@")
+    authority = f"{userinfo}{separator}{host}"
+    pairs = parse_qsl(parts.query, keep_blank_values=True)
+    sas = any(key.lower() == "sig" for key, _ in pairs)
+    query = urlencode([
+        (key, value) for key, value in pairs
+        if key.lower() not in _AUTH_PARAMS
+        and not key.lower().startswith(("x-amz-", "x-goog-"))
+        and not (sas and key.lower() in _SAS_PARAMS)
+    ])
+    return urlunsplit((parts.scheme, authority, parts.path or "/", query, ""))
 
 
 class Cache(ABC):
@@ -102,6 +144,7 @@ class MemoryCache(Cache):
         )
 
     def get(self, url: str) -> "Media | None":
+        url = canonical_url(url)
         try:
             media = self._store[url]
         except KeyError:
@@ -116,7 +159,9 @@ class MemoryCache(Cache):
         return media
 
     def put(self, media: "Media") -> None:
-        url = media.url
+        self._put(canonical_url(media.url), media)
+
+    def _put(self, url: str, media: "Media") -> None:
         if not url:
             return
         if url in self._store:
@@ -129,6 +174,7 @@ class MemoryCache(Cache):
         self._order.insert(0, url)
 
     def remove(self, url: str) -> None:
+        url = canonical_url(url)
         try:
             del self._store[url]
             self._order.remove(url)
@@ -177,8 +223,18 @@ def is_cache_fresh(cache_value: str) -> bool:
 
 
 # internal
-def put_all_caches(caches: Sequence[Cache], media: Media | None) -> None:
+def put_all_caches(
+    caches: Sequence[Cache], media: Media | None, url: str | None = None,
+) -> None:
     """Store media in all registered caches."""
     if media is not None:
+        key = canonical_url(media.url if url is None else url)
+        cached = media
+        if media.url != key:
+            cached = copy(media)
+            cached.url = key
         for cache in caches:
-            cache.put(media)
+            if isinstance(cache, MemoryCache):
+                cache._put(key, media)
+            else:
+                cache.put(cached)

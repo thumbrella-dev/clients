@@ -17,7 +17,7 @@
 import type { CacheBackend } from "./cache.js";
 import { createMemoryCache } from "./cache.js";
 import { Result, Media, EncodedJpeg, Status, Source, FileKind } from "./types.js";
-import { getClient, BatchedClient, getBatchedClient } from "./batched.js";
+import { configureClients, getClient, BatchedClient, getBatchedClient } from "./batched.js";
 
 // Re-exports — everything you need in the browser from one import
 
@@ -61,6 +61,7 @@ const _config: BrowserConfig = {};
 export function configure(opts: BrowserConfig): void {
   if (opts.connect !== undefined) _config.connect = opts.connect;
   if (opts.caches !== undefined) _config.caches = opts.caches;
+  configureClients(opts);
 }
 
 // IndexedDB cache
@@ -71,12 +72,15 @@ let _persistentCache: CacheBackend | null = null;
  * Create a persistent thumbnail cache backed by IndexedDB.
  *
  * Mirrors {@link createMemoryCache} — returns a {@link CacheBackend}
- * that survives page reloads.  Pass it to a Client, or call this on its
- * own to push it onto the global configuration.
+ * that survives page reloads. Pass it to a Client, or use
+ * {@link enablePersistentCache} to configure shared browser clients.
  *
  * @param maxMb  Maximum storage in megabytes (default 5).
  */
 export function createBrowserCache(maxMb = 5): CacheBackend {
+  if (!Number.isFinite(maxMb) || maxMb <= 0) {
+    throw new RangeError("Browser cache size must be a positive number of megabytes");
+  }
   return createIndexedDbCache(maxMb);
 }
 
@@ -90,12 +94,10 @@ export function createBrowserCache(maxMb = 5): CacheBackend {
  * @param maxMb  Maximum storage in megabytes (default 5).
  */
 export function enablePersistentCache(maxMb = 5): CacheBackend {
-  if (_persistentCache) return _persistentCache;
-  _persistentCache = createBrowserCache(maxMb);
-  if (_config.caches) {
-    _config.caches.push(_persistentCache);
-  } else {
-    _config.caches = [_persistentCache];
+  _persistentCache ??= createBrowserCache(maxMb);
+  const caches = _config.caches ?? [createMemoryCache()];
+  if (!caches.includes(_persistentCache)) {
+    configure({ caches: [...caches, _persistentCache] });
   }
   return _persistentCache;
 }
@@ -271,6 +273,9 @@ function createIndexedDbCache(maxMb: number): CacheBackend {
   let dbPromise: Promise<IDBDatabase> | null = null;
 
   function openDb(): Promise<IDBDatabase> {
+    if (typeof indexedDB === "undefined") {
+      return Promise.reject(new DOMException("IndexedDB is unavailable", "NotSupportedError"));
+    }
     if (dbPromise) return dbPromise;
     dbPromise = new Promise((resolve, reject) => {
       const req = indexedDB.open(DB_NAME, 1);
@@ -283,94 +288,64 @@ function createIndexedDbCache(maxMb: number): CacheBackend {
     return dbPromise;
   }
 
-  async function estimateSize(): Promise<number> {
-    const db = await openDb();
-    const tx = db.transaction(STORE_NAME, "readonly");
-    const store = tx.objectStore(STORE_NAME);
-    let size = 0;
-    return new Promise((resolve) => {
-      const cursorReq = store.openCursor();
-      cursorReq.onsuccess = () => {
-        const cursor = cursorReq.result;
-        if (cursor) {
-          size += (cursor.value as Uint8Array).byteLength;
-          cursor.continue();
-        } else {
-          resolve(size);
-        }
-      };
-      cursorReq.onerror = () => resolve(size);
-    });
-  }
-
-  async function evict(db: IDBDatabase, needed: number): Promise<void> {
-    const tx = db.transaction(STORE_NAME, "readwrite");
-    const store = tx.objectStore(STORE_NAME);
-    const keys: string[] = [];
-    return new Promise((resolve) => {
-      const cursorReq = store.openCursor();
-      cursorReq.onsuccess = () => {
-        const cursor = cursorReq.result;
-        if (cursor) {
-          keys.push(cursor.key as string);
-          cursor.continue();
-        } else {
-          let freed = 0;
-          for (const key of keys) {
-            if (freed >= needed) break;
-            const val = (cursor as unknown as { value?: Uint8Array })?.value;
-            if (val) freed += val.byteLength;
-            store.delete(key);
-          }
-          resolve();
-        }
-      };
-      cursorReq.onerror = () => resolve();
-    });
-  }
-
   const maxBytes = maxMb * 1024 * 1024;
 
   return {
     async get(key: string): Promise<Uint8Array | undefined> {
-      try {
-        const db = await openDb();
-        return new Promise((resolve) => {
-          const tx = db.transaction(STORE_NAME, "readonly");
-          const req = tx.objectStore(STORE_NAME).get(key);
-          req.onsuccess = () => resolve(req.result as Uint8Array | undefined);
-          req.onerror = () => resolve(undefined);
-        });
-      } catch {
-        return undefined;
-      }
+      const db = await openDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, "readonly");
+        const req = tx.objectStore(STORE_NAME).get(key);
+        req.onsuccess = () => resolve(req.result as Uint8Array | undefined);
+        req.onerror = () => reject(req.error);
+        tx.onabort = () => reject(tx.error);
+      });
     },
 
     async set(key: string, value: Uint8Array): Promise<void> {
-      try {
-        const db = await openDb();
-        const currentSize = await estimateSize();
-        if (currentSize + value.byteLength > maxBytes) {
-          await evict(db, currentSize + value.byteLength - maxBytes);
-        }
-        return new Promise((resolve) => {
-          const tx = db.transaction(STORE_NAME, "readwrite");
-          tx.objectStore(STORE_NAME).put(value, key);
-          tx.oncomplete = () => resolve();
-          tx.onerror = () => resolve();
-        });
-      } catch {
-        // Silently fail — caching is best-effort.
+      if (value.byteLength > maxBytes) {
+        throw new RangeError("Media record exceeds browser cache capacity");
       }
+      const db = await openDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, "readwrite");
+        const store = tx.objectStore(STORE_NAME);
+        const entries: { key: IDBValidKey; size: number }[] = [];
+        let size = value.byteLength;
+        const req = store.openCursor();
+        req.onsuccess = () => {
+          const cursor = req.result;
+          if (cursor) {
+            if (cursor.key !== key) {
+              const entrySize = (cursor.value as Uint8Array).byteLength;
+              entries.push({ key: cursor.key, size: entrySize });
+              size += entrySize;
+            }
+            cursor.continue();
+          } else {
+            for (const entry of entries) {
+              if (size <= maxBytes) break;
+              store.delete(entry.key);
+              size -= entry.size;
+            }
+            store.put(value, key);
+          }
+        };
+        req.onerror = () => reject(req.error);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      });
     },
 
     reset(): void {
-      try {
-        openDb().then(db => {
-          const tx = db.transaction(STORE_NAME, "readwrite");
-          tx.objectStore(STORE_NAME).clear();
-        }).catch(() => {});
-      } catch { /* best-effort */ }
+      void openDb().then(db => new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, "readwrite");
+        tx.objectStore(STORE_NAME).clear();
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      })).catch((error: unknown) => console.warn("Thumbrella browser cache reset failed", error));
     },
   };
 }
@@ -714,7 +689,6 @@ export interface SetupConfig {
  */
 export function tbrSetup(connectOrOpts?: string | SetupConfig): void {
   if (_booted || typeof document === "undefined") return;
-  _booted = true;
 
   const scriptDs = findScript()?.dataset ?? {};
 
@@ -727,6 +701,19 @@ export function tbrSetup(connectOrOpts?: string | SetupConfig): void {
     (window as unknown as Record<string, string>).TBR_CONNECT = explicitConnect;
   }
 
+  const persist = typeof connectOrOpts === "object"
+    ? connectOrOpts.persist ?? scriptDs.tbrPersist
+    : scriptDs.tbrPersist;
+  configure({ connect: explicitConnect, caches: _config.caches ?? [createMemoryCache()] });
+  if (persist !== undefined && persist !== false && persist !== "false" && persist !== 0 && persist !== "0") {
+    const maxMb = persist === true || persist === "" || persist === "true" ? 5 : Number(persist);
+    if (!Number.isFinite(maxMb) || maxMb <= 0) {
+      throw new RangeError("tbrSetup persist must be a positive number of megabytes or a boolean");
+    }
+    enablePersistentCache(maxMb);
+  }
+
+  _booted = true;
   if (typeof customElements !== "undefined") {
     customElements.define("tbr-thumb", TbrThumb);
   }
@@ -749,7 +736,7 @@ function cachedBlobUrl(key: number, bytes: Uint8Array): string {
 function findScript(): HTMLScriptElement | null {
   if (typeof document === "undefined") return null;
   if (document.currentScript) return document.currentScript as HTMLScriptElement;
-  return document.querySelector<HTMLScriptElement>("script[data-tbr-connect]");
+  return document.querySelector<HTMLScriptElement>("script[data-tbr-connect], script[data-tbr-persist]");
 }
 
 function injectStyles(): void {

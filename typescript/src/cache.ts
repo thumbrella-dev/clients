@@ -1,9 +1,48 @@
 import { Media } from "./types.js";
 
+const AUTH_PARAMS = new Set([
+  "auth", "authorization", "token", "access_token", "auth_token",
+  "api_key", "apikey", "signature", "sig", "credential", "security_token",
+  "expires", "expiry", "awsaccesskeyid", "googleaccessid", "policy", "key-pair-id",
+]);
+const SAS_PARAMS = new Set([
+  "sv", "ss", "srt", "sp", "se", "st", "spr", "sip", "sr", "si",
+  "skoid", "sktid", "skt", "ske", "sks", "skv", "saoid", "suoid", "scid",
+]);
+
+/**
+ * Stable HTTP cache identity, without fragments or signing credentials.
+ * Non-authentication query parameters (including their order) are preserved.
+ * Local paths, non-HTTP URLs and malformed URLs are left unchanged.
+ */
+export function canonicalUrl(raw: string): string {
+  if (!/^https?:\/\//i.test(raw)) return raw;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch (error) {
+    if (error instanceof TypeError) return raw;
+    throw error;
+  }
+  url.hash = "";
+  const keys = [...url.searchParams.keys()];
+  const sas = keys.some((key) => key.toLowerCase() === "sig");
+  for (const key of keys) {
+    const lower = key.toLowerCase();
+    if (AUTH_PARAMS.has(lower) || lower.startsWith("x-amz-")
+      || lower.startsWith("x-goog-") || (sas && SAS_PARAMS.has(lower))) {
+      url.searchParams.delete(key);
+    }
+  }
+  url.search = url.searchParams.toString();
+  return url.href;
+}
+
 /**
  * Low-level byte cache backend.
  *
- * Caches operate on raw thumbnail bytes (Uint8Array). Both sync and async
+ * Caches operate on bytes (Uint8Array). The client serializes complete media
+ * records, including thumbnail bytes and freshness metadata. Both sync and async
  * backends are supported — the caller always `await`s the result.
  *
  * Any object with matching `get`/`set` methods satisfies this interface
@@ -20,6 +59,9 @@ export interface CacheBackend {
   /** Clear all cached entries and reset statistics. */
   reset(): void;
 }
+
+/** A media cache or a sync/async byte storage backend. */
+export type ClientCache = Cache | CacheBackend;
 
 // Inline LRU
 
@@ -144,6 +186,7 @@ export class MemoryCache implements Cache {
   }
 
   get(url: string): Media | undefined {
+    url = canonicalUrl(url);
     const media = this.store.get(url);
     if (!media) {
       this._misses++;
@@ -155,8 +198,8 @@ export class MemoryCache implements Cache {
     return media;
   }
 
-  put(media: Media): void {
-    const url = media.url;
+  put(media: Media, cacheUrl = media.url): void {
+    const url = canonicalUrl(cacheUrl);
     if (!url) return;
     if (this.store.has(url)) {
       this.order = this.order.filter((u) => u !== url);
@@ -169,6 +212,7 @@ export class MemoryCache implements Cache {
   }
 
   remove(url: string): void {
+    url = canonicalUrl(url);
     this.store.delete(url);
     this.order = this.order.filter((u) => u !== url);
   }
@@ -185,9 +229,53 @@ export class MemoryCache implements Cache {
   get misses(): number { return this._misses; }
 }
 
-/** Store media in all caches. */
-export function putAllCaches(caches: readonly Cache[], media: Media | null): void {
+/** Read media using a canonical key from either cache API. */
+export async function getCachedMedia(cache: ClientCache, url: string): Promise<Media | undefined> {
+  try {
+    const value = await cache.get(canonicalUrl(url));
+    if (value === undefined || value instanceof Media) return value;
+    return new Media(JSON.parse(new TextDecoder().decode(value)) as Record<string, unknown>);
+  } catch (error) {
+    if (!(error instanceof DOMException || error instanceof SyntaxError)) throw error;
+    console.warn("Thumbrella cache read failed", error);
+    return undefined;
+  }
+}
+
+/** Store media in all caches, keyed by the original request URL when supplied. */
+export async function putAllCaches(
+  caches: readonly ClientCache[],
+  media: Media | null,
+  url = media?.url ?? "",
+): Promise<void> {
   if (media) {
-    for (const c of caches) c.put(media);
+    const key = canonicalUrl(url);
+    const cached = media.url === key ? media : Object.assign(new Media({}), media, { url: key });
+    let bytes: Uint8Array | undefined;
+    for (const c of caches) {
+      if (c instanceof MemoryCache) {
+        c.put(media, key);
+      } else if ("put" in c) {
+        c.put(cached);
+      } else {
+        bytes ??= new TextEncoder().encode(JSON.stringify({
+          url: key,
+          mime: media.mime,
+          file_size: media.fileSize,
+          kind: media.kind,
+          extension: media.extension,
+          properties: media.properties,
+          cache: media.cache,
+          placeholder: media.placeholder,
+          thumbnail: btoa(Array.from(media.thumbnail.bytes, (b) => String.fromCharCode(b)).join("")),
+        }));
+        try {
+          await c.set(key, bytes);
+        } catch (error) {
+          if (!(error instanceof DOMException || error instanceof RangeError)) throw error;
+          console.warn("Thumbrella cache write failed", error);
+        }
+      }
+    }
   }
 }

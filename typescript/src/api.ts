@@ -1,5 +1,5 @@
-import type { Cache } from "./cache.js";
-import { MemoryCache, putAllCaches } from "./cache.js";
+import type { ClientCache } from "./cache.js";
+import { MemoryCache, getCachedMedia, putAllCaches } from "./cache.js";
 import { CLIENT_MAJOR_MINOR } from "./version.js";
 import {
   Result,
@@ -107,12 +107,12 @@ export function parseConnect(connect?: string): ConnectConfig {
 export class Client {
   readonly baseUrl: string;
   private headers: Record<string, string>;
-  private caches: Cache[];
+  private caches: ClientCache[];
   private connectSource: ConnectSource;
 
   constructor(connectOrOpts?: string | {
     connect?: string;
-    caches?: Cache[] | null;
+    caches?: ClientCache[] | null;
   }) {
     const opts = typeof connectOrOpts === "string"
       ? { connect: connectOrOpts }
@@ -269,7 +269,7 @@ export class Client {
 
   /** Internal: stream a single chunk of at most BATCH_MAX_ITEMS URLs. */
   private async *_streamChunk(urls: string[]): AsyncGenerator<Result> {
-    const { done, stale } = preflightUrls(urls, this.caches);
+    const { done, stale } = await preflightUrls(urls, this.caches);
 
     for (const url of urls) {
       const r = done.get(url);
@@ -323,36 +323,31 @@ export class Client {
         for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed) continue;
-          try {
-            const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-            const resultData = parseBatchLine(parsed);
-            if (!resultData) continue;
-            const itemUrl = resultData.url as string | undefined;
-            // Only a terminal result completes a URL. Intermediate results must
-            // not remove the URL from `pending`, otherwise an interrupted stream
-            // leaves that element stuck in the loading state forever.
-            if (itemUrl && resultData.status !== Status.INTERMEDIATE) pending.delete(itemUrl);
-            yield resultFromServer(resultData, this.caches, this.baseUrl, url);
-          } catch {
-            // skip malformed lines
-          }
+          const resultData = parseBatchLine(trimmed);
+          if (!resultData) continue;
+          const result = await resultFromServer(resultData, this.caches, this.baseUrl, url);
+          const itemUrl = resultData.url as string | undefined;
+          // Only a terminal result completes a URL. Intermediate results must
+          // not remove the URL from `pending`, otherwise an interrupted stream
+          // leaves that element stuck in the loading state forever.
+          if (itemUrl && resultData.status !== Status.INTERMEDIATE) pending.delete(itemUrl);
+          yield result;
         }
       }
       if (buffer.trim()) {
-        try {
-          const parsed = JSON.parse(buffer.trim());
-          const resultData = parseBatchLine(parsed);
-          if (resultData) {
-            const itemUrl = resultData.url as string | undefined;
-            if (itemUrl && resultData.status !== Status.INTERMEDIATE) pending.delete(itemUrl);
-            yield resultFromServer(resultData, this.caches, this.baseUrl, url);
-          }
-        } catch {
-          // ignore
+        const resultData = parseBatchLine(buffer.trim());
+        if (resultData) {
+          const result = await resultFromServer(resultData, this.caches, this.baseUrl, url);
+          const itemUrl = resultData.url as string | undefined;
+          if (itemUrl && resultData.status !== Status.INTERMEDIATE) pending.delete(itemUrl);
+          yield result;
         }
       }
-    } catch {
-      // stream interrupted
+    } catch (error) {
+      for (const url of pending) {
+        yield Result.clientFail(url, `stream connection lost: ${error}`);
+      }
+      pending.clear();
     } finally {
       clearTimeout(timeoutId);
     }
@@ -412,8 +407,13 @@ export class Client {
     return resp;
   }
 
-  get cachesList(): readonly Cache[] {
+  get cachesList(): readonly ClientCache[] {
     return this.caches;
+  }
+
+  /** Replace the client-side cache stack without replacing the client. */
+  setCaches(caches: readonly ClientCache[]): void {
+    this.caches = [...caches];
   }
 
   /**
@@ -485,10 +485,10 @@ function isAbsolutePath(s: string): boolean {
   return /^[a-zA-Z]:[/\\]/.test(s);
 }
 
-function preflightUrls(
+async function preflightUrls(
   urls: string[],
-  caches: readonly Cache[],
-): { done: Map<string, Result>; stale: { url: string; cache?: string }[] } {
+  caches: readonly ClientCache[],
+): Promise<{ done: Map<string, Result>; stale: { url: string; cache?: string }[] }> {
   const done = new Map<string, Result>();
   const stale: { url: string; cache?: string }[] = [];
 
@@ -500,7 +500,7 @@ function preflightUrls(
 
     let fresh = false;
     for (const cache of caches) {
-      const media = cache.get(url);
+      const media = await getCachedMedia(cache, url);
       if (media?.isFresh()) {
         done.set(
           url,
@@ -516,7 +516,7 @@ function preflightUrls(
     // Stale — must go to server.
     const item: { url: string; cache?: string } = { url };
     for (const cache of caches) {
-      const media = cache.get(url);
+      const media = await getCachedMedia(cache, url);
       if (media?.cache) {
         item.cache = media.cache;
         break;
@@ -547,28 +547,36 @@ function placeholderThumb(
   return blob;
 }
 
-function mediaFromCaches(url: string, caches: readonly Cache[]): Media | undefined {
+async function mediaFromCaches(url: string, caches: readonly ClientCache[]): Promise<Media | undefined> {
   for (const cache of caches) {
-    const m = cache.get(url);
+    const m = await getCachedMedia(cache, url);
     if (m) return m;
   }
   return undefined;
 }
 
 /** Validate that a parsed JSON object is a streaming result (must have url + status). */
-function parseBatchLine(parsed: Record<string, unknown>): Record<string, unknown> | null {
-  if (typeof parsed.url === "string" && typeof parsed.status === "string") {
+function parseBatchLine(line: string): Record<string, unknown> | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch (error) {
+    if (error instanceof SyntaxError) return null;
+    throw error;
+  }
+  if (typeof parsed === "object" && parsed !== null && "url" in parsed && "status" in parsed
+    && typeof parsed.url === "string" && typeof parsed.status === "string") {
     return parsed;
   }
   return null;
 }
 
-function resultFromServer(
+async function resultFromServer(
   item: Record<string, unknown>,
-  caches: readonly Cache[],
+  caches: readonly ClientCache[],
   serverKey: string,
   requestUrl: string,
-): Result {
+): Promise<Result> {
   const r = new Result(item);
   if (r.pin !== null) {
     try {
@@ -582,10 +590,10 @@ function resultFromServer(
 
   if (source === Source.NOT_MODIFIED) {
     const url = (item.url as string) ?? "";
-    const media = mediaFromCaches(url, caches);
+    const media = await mediaFromCaches(url, caches);
     if (media) {
       r.media = media;
-      putAllCaches(caches, r.media);
+      await putAllCaches(caches, r.media, r.url);
       return r;
     }
   }
@@ -598,11 +606,11 @@ function resultFromServer(
     media.thumbnail = thumb;
     media.placeholder = placeholder;
     r.media = media;
-    putAllCaches(caches, r.media);
+    await putAllCaches(caches, r.media, r.url);
     return r;
   }
 
-  putAllCaches(caches, r.media);
+  await putAllCaches(caches, r.media, r.url);
   return r;
 }
 

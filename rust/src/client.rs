@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use crate::cache::{Cache, MemoryCache};
+use crate::cache::{Cache, MemoryCache, canonical_url};
 use crate::types::*;
 
 const DEFAULT_BASE: &str = "https://cloud.thumbrella.dev";
@@ -393,9 +393,7 @@ impl Client {
 
             for mut item in batch.items {
                 item.resolve_pin(&request_url).map_err(|e| Error::Http(code, e))?;
-                for cache in &self.caches {
-                    cache.put(&item.media);
-                }
+                self.cache_media(&item.url, &item.media);
                 done.insert(item.url.clone(), item);
             }
         }
@@ -578,9 +576,10 @@ impl Client {
             }
 
             // Check caches for a fresh entry.
+            let cache_url = canonical_url(url);
             let mut fresh = false;
             for cache in &self.caches {
-                if let Some(cached) = cache.get(url)
+                if let Some(cached) = cache.get(&cache_url)
                     && cached.is_fresh()
                 {
                     let mut r = ResultData::new(url.to_string());
@@ -598,7 +597,7 @@ impl Client {
 
             let mut item = serde_json::json!({ "url": url });
             for cache in &self.caches {
-                if let Some(cached) = cache.get(url)
+                if let Some(cached) = cache.get(&cache_url)
                     && !cached.cache.is_empty()
                 {
                     item["cache"] = serde_json::Value::String(cached.cache.clone());
@@ -633,10 +632,18 @@ impl Client {
         if result.status != status::INTERMEDIATE {
             pending.remove(&result.url);
         }
-        for cache in &self.caches {
-            cache.put(&result.media);
-        }
+        self.cache_media(&result.url, &result.media);
         Some(result)
+    }
+
+    fn cache_media(&self, url: &str, media: &Media) {
+        let media = Media {
+            url: canonical_url(url),
+            ..media.clone()
+        };
+        for cache in &self.caches {
+            cache.put(&media);
+        }
     }
 
     fn build_request(&self, client: &HttpClient, method: &str, path: &str) -> reqwest::RequestBuilder {
@@ -655,5 +662,62 @@ impl Client {
     /// timeout, so long-running NDJSON responses are not cut short.
     fn stream_request(&self, method: &str, path: &str) -> reqwest::RequestBuilder {
         self.build_request(&self.stream_http, method, path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[tokio::test]
+    async fn canonical_cache_keys_preserve_result_and_request_urls() {
+        let client = Client::new(Some("https://server.test"));
+        let first = "https://media.test/a?v=2&token=one#part";
+        let second = "https://media.test/a?v=2&token=two";
+        let different = "https://media.test/a?v=3&token=three";
+        let expiry = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() + 3600;
+        let mut media = Media {
+            // The server currently strips all query parameters from media URLs.
+            url: "https://media.test/a".into(),
+            cache: format!("{expiry:x}:test"),
+            thumbnail: vec![1, 2, 3].into(),
+            ..Media::default()
+        };
+        client.cache_media(first, &media);
+        assert_eq!(media.url, "https://media.test/a");
+        let stored = client.caches()[0].get("https://media.test/a?v=2").unwrap();
+        assert_eq!(stored.url, "https://media.test/a?v=2");
+
+        let results = client.batch(&[second]).await.unwrap();
+        assert_eq!(results[0].url, second);
+        assert_eq!(results[0].source.as_deref(), Some(source::CACHE));
+        assert_eq!(results[0].media.thumbnail.bytes(), &[1, 2, 3]);
+        let urls = [second];
+        let streamed: Vec<_> = client.stream(&urls).collect().await;
+        assert_eq!(streamed[0].url, second);
+        assert_eq!(streamed[0].source.as_deref(), Some(source::CACHE));
+
+        let (_, stale) = client.preflight(&[different]);
+        assert_eq!(stale, vec![serde_json::json!({"url": different})]);
+        client.reset_caches();
+        media.cache = "1:stale".into();
+        let mut result = ResultData::new(first.into());
+        result.status = status::SUCCESS.into();
+        result.media = media;
+        let mut pending = HashSet::from([first.to_string()]);
+        let result = client
+            .finish_stream_result(
+                result,
+                &mut pending,
+                &reqwest::Url::parse("https://server.test/batch").unwrap(),
+            )
+            .unwrap();
+        assert_eq!(result.url, first);
+        assert_eq!(result.media.url, "https://media.test/a");
+        assert!(pending.is_empty());
+        let (done, stale) = client.preflight(&[second]);
+        assert!(done.is_empty());
+        assert_eq!(stale, vec![serde_json::json!({"url": second, "cache": "1:stale"})]);
     }
 }

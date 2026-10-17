@@ -23,7 +23,8 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "bench": "npx tsx scripts/bench.ts"
+    "bench": "npx tsx scripts/bench.ts",
+    "test": "tsx --test scripts/test-*.ts"
   },
   "keywords": [
     "thumbrella",
@@ -48,6 +49,7 @@
     "@types/node": "^26.6.2",
     "dotenv": "^18.0.1",
     "esbuild": "0.28.2",
+    "fake-indexeddb": "^6.2.6",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   }
