@@ -6,7 +6,7 @@ export {
   removeFromCaches,
   createMemoryCache,
 } from "./cache.js";
-export type { Cache, CacheBackend } from "./cache.js";
+export type { Cache, CacheBackend, ClientCache } from "./cache.js";
 export {
   Result,
   Media,

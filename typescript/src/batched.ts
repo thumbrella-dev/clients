@@ -7,22 +7,35 @@
  */
 
 import { Client } from "./api.js";
-import type { Cache } from "./cache.js";
+import type { ClientCache } from "./cache.js";
 import { MemoryCache } from "./cache.js";
 import { Result, Status } from "./types.js";
 
 // Shared clients, one per connect string
 
 const _clients = new Map<string, Client>();
+const _defaults: { connect?: string; caches?: ClientCache[] } = {};
 
 /**
  * One result cache shared by every client created here.
  *
- * Caches are keyed by media URL, not by server, so switching connect strings
- * keeps every thumbnail already fetched.  A per-client cache would throw the
- * whole collection away on each `tbrSetup()` call.
+ * Caches are keyed by canonical URL, not by server, so switching connect
+ * strings keeps every thumbnail already fetched.  A per-client cache would
+ * throw the whole collection away on each `tbrSetup()` call.
  */
-const _sharedCaches: Cache[] = [new MemoryCache()];
+const _sharedCaches: ClientCache[] = [new MemoryCache()];
+
+/** Update defaults used by shared clients, including existing ones. */
+export function configureClients(opts: {
+  connect?: string;
+  caches?: ClientCache[];
+}): void {
+  if (opts.connect !== undefined) _defaults.connect = opts.connect;
+  if (opts.caches !== undefined) {
+    _defaults.caches = opts.caches;
+    for (const client of _clients.values()) client.setCaches(opts.caches);
+  }
+}
 
 /**
  * Get (or create) a shared Thumbrella {@link Client}.
@@ -31,17 +44,18 @@ const _sharedCaches: Cache[] = [new MemoryCache()];
  *
  * Clients are keyed by connect string: a page that switches servers at
  * runtime gets a client for the new one instead of silently reusing the
- * client created for the first.  All of them share one result cache.
+ * client created for the first.  All of them share the default cache stack
+ * unless `configureClients` supplies one.
  */
 export function getClient(connect?: string): Client {
-  const target = connect ??
+  const target = connect ?? _defaults.connect ??
     (typeof window !== "undefined"
       ? (window as unknown as Record<string, string>).TBR_CONNECT
       : undefined);
   const key = target || "__default__";
   let client = _clients.get(key);
   if (!client) {
-    client = new Client({ connect: target, caches: _sharedCaches });
+    client = new Client({ connect: target, caches: _defaults.caches ?? _sharedCaches });
     _clients.set(key, client);
   }
   return client;
@@ -150,6 +164,8 @@ export class BatchedClient {
   readonly limit: number;
   /** Every unfinished URL, queued or in flight, and its subscribers. */
   #active = new Map<string, Set<ReturnType<typeof createAsyncQueue<Result>>>>();
+  /** Latest in-flight intermediate per URL, replayed to late subscribers. */
+  #intermediates = new Map<string, Result>();
   #queue: string[] = [];
   #inflight = 0;
   #lastSend = 0;
@@ -186,6 +202,11 @@ export class BatchedClient {
     // consumers — each `next()` settles a single waiter — leaving the second
     // element waiting for a result that had already been delivered.
     subs.add(q);
+    // A subscriber that joins after the first progress frame still needs the
+    // placeholder.  The result cache deliberately holds terminal answers only,
+    // so replay the latest in-flight intermediate from here instead.
+    const intermediate = this.#intermediates.get(url);
+    if (intermediate) q.push(intermediate);
     return q.iter;
   }
 
@@ -229,6 +250,7 @@ export class BatchedClient {
           if (!q.closed) q.done();
         }
       }
+      this.#intermediates.delete(url);
       this.#active.delete(url);
       if (open.delete(url)) {
         this.#inflight--;
@@ -240,6 +262,7 @@ export class BatchedClient {
       for await (const result of this.#client.stream(batch)) {
         if (!open.has(result.url)) continue;
         if (result.status === Status.INTERMEDIATE) {
+          this.#intermediates.set(result.url, result);
           send(result.url, result);
         } else {
           finish(result.url, result);

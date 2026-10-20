@@ -69,23 +69,23 @@ async function testCanonicalCacheKeys(): Promise<void> {
   assert.equal(seen[0]?.url, a, "the full signed URL is sent on the wire");
   assert.equal(seen[1]?.cache, "1:tok", "the canonical cache entry supplies the token");
   assert.equal(second.url, b, "the result keeps the requested URL");
-  assert.ok(mediaFromCaches([cache], a), "the first variant is cached");
+  assert.ok(await mediaFromCaches([cache], a), "the first variant is cached");
   assert.ok(
-    mediaFromCaches([cache], b),
+    await mediaFromCaches([cache], b),
     "the second variant resolves to the same cache entry",
   );
   assert.equal(cache.size, 1, "signed variants share one entry");
 }
 
-function testRemoveFromCaches(): void {
+async function testRemoveFromCaches(): Promise<void> {
   const a = "https://CDN.Example.com/path/File.JPG?X-Amz-Signature=aaa";
   const b = "https://cdn.example.com/path/File.JPG?X-Amz-Signature=bbb";
   const cache = new MemoryCache();
 
-  putAllCaches([cache], a, new Media({ url: a, cache: "1:tok" }));
+  await putAllCaches([cache], a, new Media({ url: a, cache: "1:tok" }));
   assert.equal(cache.size, 1);
 
-  removeFromCaches([cache], b);
+  await removeFromCaches([cache], b);
   assert.equal(
     cache.size,
     0,
@@ -173,6 +173,53 @@ async function testFanOut(): Promise<void> {
   const [first, second] = await Promise.all([collect(), collect()]);
   assert.deepEqual(first, [Status.INTERMEDIATE, Status.SUCCESS]);
   assert.deepEqual(second, first, "both subscribers receive the whole stream");
+}
+
+async function testLateSubscriberGetsIntermediate(): Promise<void> {
+  const url = "https://media.test/slow.jpg";
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const fake = {
+    async *stream() {
+      yield new Result({
+        url,
+        status: Status.INTERMEDIATE,
+        media: { url, thumbnail: "QUJD", placeholder: "image" },
+      });
+      await gate;
+      yield new Result({
+        url,
+        status: Status.SUCCESS,
+        media: { url, thumbnail: "REVGRw==" },
+      });
+    },
+  } as unknown as Client;
+  const batched = new BatchedClient(fake);
+
+  const first = batched.streamUrl(url);
+  const firstIntermediate = await first.next();
+  assert.equal(firstIntermediate.value?.status, Status.INTERMEDIATE);
+
+  const second = batched.streamUrl(url);
+  const replayed = await second.next();
+  assert.equal(replayed.value?.status, Status.INTERMEDIATE);
+  assert.deepEqual(
+    replayed.value?.media?.thumbnail.bytes,
+    new Uint8Array([65, 66, 67]),
+    "a late subscriber receives the latest in-flight placeholder",
+  );
+
+  release();
+  const firstFinal = await first.next();
+  const secondFinal = await second.next();
+  assert.equal(firstFinal.value?.status, Status.SUCCESS);
+  assert.equal(secondFinal.value?.status, Status.SUCCESS);
+  assert.deepEqual(
+    secondFinal.value?.media?.thumbnail.bytes,
+    new Uint8Array([68, 69, 70, 71]),
+    "the final result reaches every subscriber",
+  );
+  assert.equal((await second.next()).done, true);
 }
 
 async function testClientKeying(): Promise<void> {
@@ -266,7 +313,7 @@ async function testIntermediateDoesNotWinCache(): Promise<void> {
   const step = await iter.next();
   assert.equal(step.value?.status, Status.INTERMEDIATE);
   assert.equal(
-    mediaFromCaches([cache], requested),
+    await mediaFromCaches([cache], requested),
     undefined,
     "an intermediate placeholder must not seed the cache",
   );
@@ -278,7 +325,7 @@ async function testIntermediateDoesNotWinCache(): Promise<void> {
   assert.equal(last.value?.media?.placeholder, "", "the final result is not a placeholder");
   await iter.return?.(undefined);
 
-  const cached = mediaFromCaches([cache], requested);
+  const cached = await mediaFromCaches([cache], requested);
   assert.ok(cached, "the final result is cached under the requested URL");
   assert.equal(cached.placeholder, "", "the final result replaces the intermediate");
   assert.equal(cached.thumbnail.length, 4, "the final thumbnail is the one kept");
@@ -295,12 +342,13 @@ async function testIntermediateDoesNotWinCache(): Promise<void> {
 
 async function main(): Promise<void> {
   try {
-    testRemoveFromCaches();
+    await testRemoveFromCaches();
     await testExactEcho();
     await testDistinctVariants();
     await testRevalidation();
     await testCanonicalCacheKeys();
     await testFanOut();
+    await testLateSubscriberGetsIntermediate();
     await testClientKeying();
     await testFailuresAreNotCachedFresh();
     await testIntermediateDoesNotWinCache();

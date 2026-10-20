@@ -130,6 +130,14 @@ jpeg.length        // number - byte count
 jpeg.key           // number - content hash, useful for deduplication
 ```
 
+## Persistent Cache
+
+`new Client({ caches })` accepts a `MemoryCache` or any `CacheBackend`
+(`createMemoryCache`, `createBrowserCache`). `enablePersistentCache()` or
+`tbrSetup({ persist: 10 })` adds IndexedDB persistence on top of the default
+memory cache. Byte backends store serialized `Media` records, so thumbnails
+and their metadata survive reloads.
+
 ## Module Structure
 
 | Import                               | Contents                                     |

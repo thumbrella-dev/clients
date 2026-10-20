@@ -31,8 +31,11 @@ function cacheKey(raw: string): string {
 /**
  * Low-level byte cache backend.
  *
- * Caches operate on raw thumbnail bytes (Uint8Array). Both sync and async
- * backends are supported — the caller always `await`s the result.
+ * Backends store opaque serialized media records (Uint8Array). The client
+ * encodes the complete Media value, including its thumbnail and freshness
+ * metadata, so persistent storage can restore it without a server call.
+ * Both sync and async backends are supported — the caller always `await`s
+ * the result.
  *
  * Any object with matching `get`/`set` methods satisfies this interface
  * via structural typing — no need to `implement` or subclass.
@@ -45,9 +48,14 @@ function cacheKey(raw: string): string {
 export interface CacheBackend {
   get(key: string): Uint8Array | undefined | Promise<Uint8Array | undefined>;
   set(key: string, value: Uint8Array): unknown | Promise<unknown>;
+  /** Remove one entry when the backend supports it. */
+  remove?(key: string): unknown | Promise<unknown>;
   /** Clear all cached entries and reset statistics. */
   reset(): void;
 }
+
+/** A media cache or a byte-storage backend. */
+export type ClientCache = Cache | CacheBackend;
 
 // Inline LRU
 
@@ -100,6 +108,13 @@ export function createMemoryCache(
       }
       map.set(key, { value, expires: Date.now() + ttl });
       order.unshift(key);
+    },
+
+    remove(key: string): void {
+      if (map.delete(key)) {
+        const idx = order.indexOf(key);
+        if (idx >= 0) order.splice(idx, 1);
+      }
     },
 
     reset(): void {
@@ -224,14 +239,14 @@ export class MemoryCache implements Cache {
  * key.  A fresh entry wins over a stale one; otherwise the first entry found
  * is returned (its `cache` token is still useful for revalidation).
  */
-export function mediaFromCaches(
-  caches: readonly Cache[],
+export async function mediaFromCaches(
+  caches: readonly ClientCache[],
   url: string,
-): Media | undefined {
+): Promise<Media | undefined> {
   const key = cacheKey(url);
   let stale: Media | undefined;
   for (const cache of caches) {
-    const media = cache.get(key);
+    const media = await getCachedMedia(cache, key);
     if (!media) continue;
     if (media.isFresh()) return media;
     stale ??= media;
@@ -240,18 +255,92 @@ export function mediaFromCaches(
 }
 
 /** Store media in every cache under the raw URL's canonical key. */
-export function putAllCaches(
-  caches: readonly Cache[],
+export async function putAllCaches(
+  caches: readonly ClientCache[],
   url: string,
   media: Media | null,
-): void {
+): Promise<void> {
   if (!media) return;
   const key = cacheKey(url);
-  for (const c of caches) c.put(key, media);
+  for (const cache of caches) {
+    if (isMediaCache(cache)) {
+      cache.put(key, media);
+      continue;
+    }
+    try {
+      await cache.set(key, encodeMedia(media, key));
+    } catch (error) {
+      if (error instanceof DOMException || error instanceof RangeError) {
+        console.warn("Thumbrella cache write failed", error);
+        continue;
+      }
+      throw error;
+    }
+  }
 }
 
 /** Remove a raw URL from every cache in a stack. */
-export function removeFromCaches(caches: readonly Cache[], url: string): void {
+export async function removeFromCaches(
+  caches: readonly ClientCache[],
+  url: string,
+): Promise<void> {
   const key = cacheKey(url);
-  for (const c of caches) c.remove(key);
+  for (const cache of caches) {
+    try {
+      if (isMediaCache(cache)) {
+        cache.remove(key);
+      } else if (cache.remove) {
+        await cache.remove(key);
+      }
+    } catch (error) {
+      if (error instanceof DOMException) {
+        console.warn("Thumbrella cache remove failed", error);
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+function isMediaCache(cache: ClientCache): cache is Cache {
+  return typeof (cache as Cache).put === "function";
+}
+
+function encodeMedia(media: Media, key: string): Uint8Array {
+  const bytes = media.thumbnail.bytes;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return new TextEncoder().encode(JSON.stringify({
+    url: key,
+    mime: media.mime,
+    file_size: media.fileSize,
+    kind: media.kind,
+    extension: media.extension,
+    properties: media.properties,
+    cache: media.cache,
+    placeholder: media.placeholder,
+    thumbnail: btoa(binary),
+  }));
+}
+
+function decodeMedia(bytes: Uint8Array): Media {
+  return new Media(JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>);
+}
+
+async function getCachedMedia(
+  cache: ClientCache,
+  key: string,
+): Promise<Media | undefined> {
+  try {
+    if (isMediaCache(cache)) return cache.get(key);
+    const value = await cache.get(key);
+    if (value === undefined) return undefined;
+    return decodeMedia(value);
+  } catch (error) {
+    if (error instanceof DOMException || error instanceof SyntaxError) {
+      console.warn("Thumbrella cache read failed", error);
+      return undefined;
+    }
+    throw error;
+  }
 }

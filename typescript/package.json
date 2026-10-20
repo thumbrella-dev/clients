@@ -25,7 +25,7 @@
     "build": "tsc -p tsconfig.json",
     "build:dev": "tsx scripts/bundle-dev.ts",
     "dev": "tsx scripts/dev.ts",
-    "test": "tsx scripts/test-pins.ts && tsx scripts/test-urls.ts",
+    "test": "tsx scripts/test-pins.ts && tsx scripts/test-urls.ts && tsx scripts/test-cache.ts",
     "bench": "npx tsx scripts/bench.ts"
   },
   "keywords": [
@@ -51,6 +51,7 @@
     "@types/node": "^26.6.2",
     "dotenv": "^18.0.1",
     "esbuild": "0.28.2",
+    "fake-indexeddb": "^6.2.6",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   }
