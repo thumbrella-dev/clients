@@ -118,7 +118,7 @@ https://thumbrella.dev/docs/client/#result
 ### Media
 
 ```python
-media.url          # str — the original media URL
+media.url          # str — simplified URL; use result.url for identity
 media.mime         # "image/jpeg" | "application/pdf" | ...
 media.kind         # "image" | "video" | "document" | "vector" | "geometry" | ...
 media.file_size    # int — original file size in bytes

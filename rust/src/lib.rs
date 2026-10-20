@@ -17,6 +17,6 @@ mod types;
 #[cfg(feature = "blocking")]
 pub mod blocking;
 
-pub use cache::{Cache, MemoryCache};
+pub use cache::{Cache, MemoryCache, media_from_caches, put_all_caches, remove_from_caches};
 pub use client::Client;
 pub use types::{Error, Media, ResultData, Thumbnail, source, status};

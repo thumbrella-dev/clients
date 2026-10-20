@@ -3,7 +3,7 @@
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// Client-side placeholder JPEG, used when no server thumbnail is available.
 const FAILED_JPEG: &[u8] = include_bytes!("failed.jpeg");
@@ -185,6 +185,15 @@ impl std::fmt::Debug for Thumbnail {
 
 //  Media
 
+/// Shared client-side failure thumbnail.
+///
+/// The bytes and hash are computed once; each `Media::failed` clones the
+/// `Arc`, so failures do not copy or re-hash the JPEG.
+fn failed_thumbnail() -> Thumbnail {
+    static FAILED: OnceLock<Thumbnail> = OnceLock::new();
+    FAILED.get_or_init(|| Thumbnail::from(FAILED_JPEG.to_vec())).clone()
+}
+
 /// Data from the [`ResultData`] that describes the source media.
 ///
 /// Any two results from the same URL that were cached (by either the client
@@ -225,7 +234,7 @@ impl Default for Media {
     fn default() -> Self {
         Self {
             url: String::new(),
-            thumbnail: Thumbnail::from(FAILED_JPEG.to_vec()),
+            thumbnail: failed_thumbnail(),
             mime: "image/jpeg".to_string(),
             file_size: 0,
             kind: String::new(),

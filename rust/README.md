@@ -123,7 +123,7 @@ for more details.
 ### Media
 
 ```rust
-media.url          // String - the original media URL
+media.url          // String - simplified URL; use result.url for identity
 media.mime         // String - "image/jpeg" | "application/pdf" | ...
 media.kind         // String - "image" | "video" | "document" | "geometry" | ...
 media.extension    // String - canonical extension without a dot

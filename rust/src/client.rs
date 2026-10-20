@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use crate::cache::{Cache, MemoryCache};
+use crate::cache::{Cache, MemoryCache, media_from_caches, put_all_caches};
 use crate::types::*;
 
 const DEFAULT_BASE: &str = "https://cloud.thumbrella.dev";
@@ -393,8 +393,8 @@ impl Client {
 
             for mut item in batch.items {
                 item.resolve_pin(&request_url).map_err(|e| Error::Http(code, e))?;
-                for cache in &self.caches {
-                    cache.put(&item.media);
+                if item.status != status::INTERMEDIATE {
+                    put_all_caches(&self.caches, &item.url, &item.media);
                 }
                 done.insert(item.url.clone(), item);
             }
@@ -578,32 +578,23 @@ impl Client {
             }
 
             // Check caches for a fresh entry.
-            let mut fresh = false;
-            for cache in &self.caches {
-                if let Some(cached) = cache.get(url)
-                    && cached.is_fresh()
-                {
-                    let mut r = ResultData::new(url.to_string());
-                    r.status = status::SUCCESS.to_string();
-                    r.source = Some(source::CACHE.to_string());
-                    r.media = cached.clone();
-                    done.insert(url.to_string(), r);
-                    fresh = true;
-                    break;
-                }
-            }
-            if fresh {
+            let media = media_from_caches(&self.caches, url);
+            if let Some(cached) = &media
+                && cached.is_fresh()
+            {
+                let mut r = ResultData::new(url.to_string());
+                r.status = status::SUCCESS.to_string();
+                r.source = Some(source::CACHE.to_string());
+                r.media = cached.clone();
+                done.insert(url.to_string(), r);
                 continue;
             }
 
             let mut item = serde_json::json!({ "url": url });
-            for cache in &self.caches {
-                if let Some(cached) = cache.get(url)
-                    && !cached.cache.is_empty()
-                {
-                    item["cache"] = serde_json::Value::String(cached.cache.clone());
-                    break;
-                }
+            if let Some(cached) = &media
+                && !cached.cache.is_empty()
+            {
+                item["cache"] = serde_json::Value::String(cached.cache.clone());
             }
             stale_items.push(item);
         }
@@ -613,8 +604,9 @@ impl Client {
 
     /// Finalize a single result parsed from an NDJSON stream line.
     ///
-    /// Drops intermediate results out of `pending` tracking, stores any media
-    /// in the attached caches, and returns the result to yield.
+    /// Terminal results are stored in the attached caches and dropped out of
+    /// `pending` tracking. Intermediate frames are not cached; they are
+    /// progress updates, not answers.
     fn finish_stream_result(
         &self,
         mut result: ResultData,
@@ -631,10 +623,8 @@ impl Client {
             return Some(result);
         }
         if result.status != status::INTERMEDIATE {
+            put_all_caches(&self.caches, &result.url, &result.media);
             pending.remove(&result.url);
-        }
-        for cache in &self.caches {
-            cache.put(&result.media);
         }
         Some(result)
     }
@@ -655,5 +645,27 @@ impl Client {
     /// timeout, so long-running NDJSON responses are not cut short.
     fn stream_request(&self, method: &str, path: &str) -> reqwest::RequestBuilder {
         self.build_request(&self.stream_http, method, path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn intermediate_results_do_not_seed_the_cache() {
+        let client = Client::with_caches(None, vec![Box::new(MemoryCache::default())]);
+        let request_url = reqwest::Url::parse("https://server.test/batch").unwrap();
+        let mut pending = HashSet::new();
+
+        let mut intermediate = ResultData::new("https://media.test/pic.svg".to_string());
+        intermediate.status = status::INTERMEDIATE.to_string();
+        client.finish_stream_result(intermediate, &mut pending, &request_url);
+        assert_eq!(client.caches()[0].len(), 0);
+
+        let mut final_result = ResultData::new("https://media.test/pic.svg".to_string());
+        final_result.status = status::SUCCESS.to_string();
+        client.finish_stream_result(final_result, &mut pending, &request_url);
+        assert_eq!(client.caches()[0].len(), 1);
     }
 }
