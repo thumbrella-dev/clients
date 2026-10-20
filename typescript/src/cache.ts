@@ -1,6 +1,34 @@
 import { Media } from "./types.js";
 
 /**
+ * Canonical cache key for a URL.
+ *
+ * HTTP(S) URLs drop the query and fragment and lowercase the scheme and host,
+ * so signed variants of one object share an entry.  Other values are used
+ * unchanged.
+ */
+function cacheKey(raw: string): string {
+  const sep = raw.indexOf("://");
+  if (sep < 0) return raw;
+
+  const scheme = raw.slice(0, sep).toLowerCase();
+  if (scheme !== "http" && scheme !== "https") return raw;
+
+  // Strip fragment then query.
+  let rest = raw.slice(sep + 3);
+  const hash = rest.indexOf("#");
+  if (hash >= 0) rest = rest.slice(0, hash);
+  const query = rest.indexOf("?");
+  if (query >= 0) rest = rest.slice(0, query);
+
+  // Lowercase the host (everything before the first path slash).
+  const slash = rest.indexOf("/");
+  const host = slash < 0 ? rest : rest.slice(0, slash);
+  const path = slash < 0 ? "" : rest.slice(slash);
+  return `${scheme}://${host.toLowerCase()}${path}`;
+}
+
+/**
  * Low-level byte cache backend.
  *
  * Caches operate on raw thumbnail bytes (Uint8Array). Both sync and async
@@ -92,16 +120,21 @@ export function createMemoryCache(
  * (`hits` / `misses`). A cache can be used with multiple clients at the
  * same time.
  *
+ * Keys are opaque strings.  {@link mediaFromCaches}, {@link putAllCaches} and
+ * {@link removeFromCaches} canonicalise a raw URL once for the whole stack, so
+ * implementations store the key they are given and never normalise it
+ * themselves.
+ *
  * See https://thumbrella.dev/docs/cache for full documentation.
  */
 export interface Cache {
-  /** Get the possible cached media for a URL. */
-  get(url: string): Media | undefined;
-  /** Store cached media for a URL. */
-  put(media: Media): void;
-  /** Remove possible cached media for a URL. */
-  remove(url: string): void;
-  /** Clear all cached URLs and reset statistics. */
+  /** Get media stored under `key` */
+  get(key: string): Media | undefined;
+  /** Store `media` under `key` */
+  put(key: string, media: Media): void;
+  /** Remove the entry stored under `key`. */
+  remove(key: string): void;
+  /** Clear all entries and reset statistics. */
   reset(): void;
   /** Number of cached entries. */
   readonly size: number;
@@ -143,34 +176,33 @@ export class MemoryCache implements Cache {
     this.maxItems = maxItems;
   }
 
-  get(url: string): Media | undefined {
-    const media = this.store.get(url);
+  get(key: string): Media | undefined {
+    const media = this.store.get(key);
     if (!media) {
       this._misses++;
       return undefined;
     }
     this._hits++;
-    this.order = this.order.filter((u) => u !== url);
-    this.order.unshift(url);
+    this.order = this.order.filter((u) => u !== key);
+    this.order.unshift(key);
     return media;
   }
 
-  put(media: Media): void {
-    const url = media.url;
-    if (!url) return;
-    if (this.store.has(url)) {
-      this.order = this.order.filter((u) => u !== url);
+  put(key: string, media: Media): void {
+    if (!key) return;
+    if (this.store.has(key)) {
+      this.order = this.order.filter((u) => u !== key);
     } else if (this.store.size >= this.maxItems) {
       const stale = this.order.pop();
       if (stale) this.store.delete(stale);
     }
-    this.store.set(url, media);
-    this.order.unshift(url);
+    this.store.set(key, media);
+    this.order.unshift(key);
   }
 
-  remove(url: string): void {
-    this.store.delete(url);
-    this.order = this.order.filter((u) => u !== url);
+  remove(key: string): void {
+    this.store.delete(key);
+    this.order = this.order.filter((u) => u !== key);
   }
 
   reset(): void {
@@ -185,9 +217,41 @@ export class MemoryCache implements Cache {
   get misses(): number { return this._misses; }
 }
 
-/** Store media in all caches. */
-export function putAllCaches(caches: readonly Cache[], media: Media | null): void {
-  if (media) {
-    for (const c of caches) c.put(media);
+/**
+ * Get cached media for a raw URL from a stack of caches.
+ *
+ * The URL is canonicalised once, so every cache in the stack sees the same
+ * key.  A fresh entry wins over a stale one; otherwise the first entry found
+ * is returned (its `cache` token is still useful for revalidation).
+ */
+export function mediaFromCaches(
+  caches: readonly Cache[],
+  url: string,
+): Media | undefined {
+  const key = cacheKey(url);
+  let stale: Media | undefined;
+  for (const cache of caches) {
+    const media = cache.get(key);
+    if (!media) continue;
+    if (media.isFresh()) return media;
+    stale ??= media;
   }
+  return stale;
+}
+
+/** Store media in every cache under the raw URL's canonical key. */
+export function putAllCaches(
+  caches: readonly Cache[],
+  url: string,
+  media: Media | null,
+): void {
+  if (!media) return;
+  const key = cacheKey(url);
+  for (const c of caches) c.put(key, media);
+}
+
+/** Remove a raw URL from every cache in a stack. */
+export function removeFromCaches(caches: readonly Cache[], url: string): void {
+  const key = cacheKey(url);
+  for (const c of caches) c.remove(key);
 }

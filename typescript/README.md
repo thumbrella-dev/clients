@@ -108,7 +108,7 @@ for more details.
 ### Media
 
 ```ts
-media.url          // string - the original media URL
+media.url          // string - informational, canonicalized url
 media.mime         // string - "image/jpeg" | "application/pdf" | ...
 media.kind         // string - "image" | "video" | "document" | "geometry" | ...
 media.extension    // string - canonical extension without a dot

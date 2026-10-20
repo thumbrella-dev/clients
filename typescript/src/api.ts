@@ -1,5 +1,5 @@
 import type { Cache } from "./cache.js";
-import { MemoryCache, putAllCaches } from "./cache.js";
+import { MemoryCache, mediaFromCaches, putAllCaches } from "./cache.js";
 import { CLIENT_MAJOR_MINOR } from "./version.js";
 import {
   Result,
@@ -285,9 +285,6 @@ export class Client {
     const body = JSON.stringify({ items: stale });
     const url = `${this.baseUrl}/batch`;
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
-
     try {
       const resp = await fetch(url, {
         method: "POST",
@@ -297,7 +294,6 @@ export class Client {
           Accept: "application/x-ndjson",
         },
         body,
-        signal: controller.signal,
       });
 
       recordBackoff(host, resp.status === 429 || resp.status === 503);
@@ -352,13 +348,10 @@ export class Client {
       }
     } catch {
       // stream interrupted
-    } finally {
-      clearTimeout(timeoutId);
     }
 
-    const reason = controller.signal.aborted ? "request timed out" : "stream connection lost";
     for (const url of pending) {
-      yield Result.clientFail(url, reason);
+      yield Result.clientFail(url, "stream connection lost");
     }
   }
 
@@ -498,30 +491,19 @@ function preflightUrls(
       continue;
     }
 
-    let fresh = false;
-    for (const cache of caches) {
-      const media = cache.get(url);
-      if (media?.isFresh()) {
-        done.set(
-          url,
-          new Result({ url, status: Status.SUCCESS, source: Source.CACHE }),
-        );
-        done.get(url)!.media = media;
-        fresh = true;
-        break;
-      }
+    const media = mediaFromCaches(caches, url);
+    if (media?.isFresh()) {
+      done.set(
+        url,
+        new Result({ url, status: Status.SUCCESS, source: Source.CACHE }),
+      );
+      done.get(url)!.media = media;
+      continue;
     }
-    if (fresh) continue;
 
     // Stale — must go to server.
     const item: { url: string; cache?: string } = { url };
-    for (const cache of caches) {
-      const media = cache.get(url);
-      if (media?.cache) {
-        item.cache = media.cache;
-        break;
-      }
-    }
+    if (media?.cache) item.cache = media.cache;
     stale.push(item);
   }
 
@@ -545,14 +527,6 @@ function placeholderThumb(
   const blob = new EncodedJpeg({ b64 });
   pool.set(placeholder, blob);
   return blob;
-}
-
-function mediaFromCaches(url: string, caches: readonly Cache[]): Media | undefined {
-  for (const cache of caches) {
-    const m = cache.get(url);
-    if (m) return m;
-  }
-  return undefined;
 }
 
 /** Validate that a parsed JSON object is a streaming result (must have url + status). */
@@ -582,10 +556,10 @@ function resultFromServer(
 
   if (source === Source.NOT_MODIFIED) {
     const url = (item.url as string) ?? "";
-    const media = mediaFromCaches(url, caches);
+    const media = mediaFromCaches(caches, url);
     if (media) {
       r.media = media;
-      putAllCaches(caches, r.media);
+      putAllCaches(caches, r.url, r.media);
       return r;
     }
   }
@@ -598,11 +572,13 @@ function resultFromServer(
     media.thumbnail = thumb;
     media.placeholder = placeholder;
     r.media = media;
-    putAllCaches(caches, r.media);
-    return r;
   }
 
-  putAllCaches(caches, r.media);
+  if (r.status !== Status.INTERMEDIATE) {
+    // Intermediates are progress frames, not answers.  Caching one would let a
+    // placeholder replace a final result.
+    putAllCaches(caches, r.url, r.media);
+  }
   return r;
 }
 

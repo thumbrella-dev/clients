@@ -16,6 +16,7 @@
 
 import type { CacheBackend } from "./cache.js";
 import { createMemoryCache } from "./cache.js";
+import type { Client } from "./api.js";
 import { Result, Media, EncodedJpeg, Status, Source, FileKind } from "./types.js";
 import { getClient, BatchedClient, getBatchedClient } from "./batched.js";
 
@@ -567,6 +568,27 @@ export class TbrThumb extends _TbrBase {
   #pending = false;
   #url: string | null = null;
 
+  /* Reflect the two URL attributes as properties.  Without these, `el.src = u`
+     on a custom element only creates an expando: `attributeChangedCallback`
+     never runs, nothing is requested, and the element sits empty forever. */
+  get src(): string | null {
+    return this.getAttribute("src");
+  }
+
+  set src(value: string | null) {
+    if (value === null) this.removeAttribute("src");
+    else this.setAttribute("src", value);
+  }
+
+  get connect(): string | null {
+    return this.getAttribute("connect");
+  }
+
+  set connect(value: string | null) {
+    if (value === null) this.removeAttribute("connect");
+    else this.setAttribute("connect", value);
+  }
+
   constructor() {
     super();
     this.#shadow = this.attachShadow({ mode: "open" });
@@ -592,9 +614,16 @@ export class TbrThumb extends _TbrBase {
       this.#load();
     }
     if (name === "connect") {
-      if (this.#pending) {
-        this.#pending = false;
-      }
+      // A different server means the current image came from the wrong place.
+      // Reset the lifecycle so #load() is willing to run again.
+      this.#loaded = false;
+      this.#pending = false;
+      this.classList.remove(
+        "tbr-loaded", "tbr-requested", "tbr-intermediate",
+        "tbr-has-intermediate", "tbr-success", "tbr-failed",
+        "tbr-overloaded", "tbr-unavailable",
+      );
+      this.#render();
       this.#load();
     }
   }
@@ -623,7 +652,20 @@ export class TbrThumb extends _TbrBase {
     this.#pending = true;
 
     const connect = resolveConnect(this);
-    const batched = getBatchedClient(connect);
+
+    // An unparseable connect string throws in the Client constructor.  Fail
+    // this element rather than leaving an unhandled rejection and a blank box.
+    let batched: BatchedClient;
+    try {
+      batched = getBatchedClient(connect);
+    } catch (err) {
+      this.#pending = false;
+      this.#applyResult(Result.clientFail(
+        this.#url,
+        err instanceof Error ? err.message : "invalid connect string",
+      ));
+      return;
+    }
 
     this.classList.add("tbr-requested");
 
@@ -693,10 +735,13 @@ export interface SetupConfig {
 }
 
 /**
- * Activate Thumbrella on the current page.
+ * Activate Thumbrella on the current page, and return the {@link Client} it
+ * points at.
  *
  * Registers `<tbr-thumb>`, configures global defaults, and injects CSS for
- * styles.  Call once — subsequent calls are no-ops.
+ * styles.  The page setup itself happens once — subsequent calls only move the
+ * connect string — but every call returns the client for that connect string,
+ * so a caller can do `tbrSetup(connect).verify()`.
  *
  * The common case is a connect string:
  * ```ts
@@ -712,26 +757,38 @@ export interface SetupConfig {
  * With no arguments, reads `data-tbr-connect` and `data-tbr-persist` from
  * the loading `<script>` tag if present.
  */
-export function tbrSetup(connectOrOpts?: string | SetupConfig): void {
-  if (_booted || typeof document === "undefined") return;
-  _booted = true;
-
+export function tbrSetup(connectOrOpts?: string | SetupConfig | null): Client {
   const scriptDs = findScript()?.dataset ?? {};
 
-  // Resolve connect: explicit string > opts.connect > script attribute > undefined
-  const explicitConnect = typeof connectOrOpts === "string"
-    ? connectOrOpts
-    : connectOrOpts?.connect ?? scriptDs.tbrConnect;
+  // Resolve the next connect string, but only when the caller actually
+  // supplied one: a no-argument call must not reset a configured page.
+  let next: string | undefined;
+  if (typeof connectOrOpts === "string") next = connectOrOpts;
+  else if (connectOrOpts === null) next = "";
+  else if (connectOrOpts?.connect !== undefined) next = connectOrOpts.connect;
+  else if (!_booted) next = scriptDs.tbrConnect;
 
-  if (explicitConnect && typeof window !== "undefined") {
-    (window as unknown as Record<string, string>).TBR_CONNECT = explicitConnect;
+  // Repeating the same value is a no-op.  A different value affects only
+  // requests made from now on: mounted elements keep their iterator and the
+  // batch already in flight keeps running.  Existing caches are untouched and
+  // shared by every connect string (see getClient).
+  if (next !== undefined && typeof window !== "undefined") {
+    const w = window as unknown as Record<string, string>;
+    if (w.TBR_CONNECT !== next) w.TBR_CONNECT = next;
   }
 
-  if (typeof customElements !== "undefined") {
-    customElements.define("tbr-thumb", TbrThumb);
+  if (typeof document !== "undefined" && !_booted) {
+    _booted = true;
+
+    if (typeof customElements !== "undefined") {
+      customElements.define("tbr-thumb", TbrThumb);
+    }
+
+    injectStyles();
   }
 
-  injectStyles();
+  // getClient falls back to window.TBR_CONNECT, which is the value set above.
+  return getClient(next);
 }
 
 //

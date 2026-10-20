@@ -144,6 +144,12 @@ export class EncodedJpeg {
  * See https://thumbrella.dev/docs/result for full documentation.
  */
 export class Media {
+  /**
+   * Informational URL reported by the server.
+   *
+   * This is not the request identity and must not be used as a cache key.
+   * Use {@link Result.url} for identity and caching.
+   */
   url: string;
   thumbnail: EncodedJpeg;
   mime: string;
@@ -184,47 +190,6 @@ export class Media {
 }
 
 //  Result
-
-/**
- * Result for every URL.
- *
- * The result describes the operation for every thumbnail URL. It handles both
- * successes and failures. There are two levels of fields on the result.
- *
- * The top-level `url` attribute contains the origin URL the request was made
- * for.
- *
- * The `status` attribute is used to help determine how this result should be
- * handled. All statuses will still include an image, even for failures.
- * Comparing the status to the defined values like `Status.SUCCESS` is the
- * best way to handle the status. The {@link Result.verify} method can also
- * be used to return either a successful result, or throw an exception
- * representing the problem.
- *
- * The top-level fields all represent the process of generating the result.
- * These describe if the operation was successful, how caching was involved,
- * and the operations used by either the client or server. Most top-level
- * fields are optionally `null`, and may not be filled in, especially if the
- * result was a failure.
- *
- * The `media` attribute represents all data collected about the media in a
- * {@link Media} value. This describes file size, the mime type, and more.
- *
- * This data is consistent and repeatable. When requesting data that has been
- * cached by either the client or the server, the result will reuse the same
- * media value that has been returned previously.
- *
- * The media also contains a `thumbnail` attribute which represents the JPEG
- * encoded binary data for the thumbnail image.
- *
- * Only the {@link Client} methods generate Result values. They are intended
- * to be immutable and constant. This is the same for the Media attribute.
- *
- * The `raw` attribute represents the raw JSON data returned by the server,
- * although the thumbnail binary data is removed for efficiency.
- *
- * See https://thumbrella.dev/docs/result for full documentation.
- */
 
 // Embedded "thumbnail unavailable" placeholder JPEG (250x200, same as failed.jpeg).
 const _FAILED_B64 =
@@ -275,6 +240,46 @@ const _FAILED_B64 =
   "IHQOgYkDoHQWgdBaB0FoLQOgtBaC0FoDQWgtAaC0BoLQGgJkBoDQAAECBAgOgdA6B0DoLQOgtA6C" +
   "0FoLQWgtBaC0FoDQWgNBaA0BoDQGggAIED//2Q==";
 
+/**
+ * Result for every URL.
+ *
+ * The result describes the operation for every thumbnail URL. It handles both
+ * successes and failures. There are two levels of fields on the result.
+ *
+ * The top-level `url` attribute contains the origin URL the request was made
+ * for.
+ *
+ * The `status` attribute is used to help determine how this result should be
+ * handled. All statuses will still include an image, even for failures.
+ * Comparing the status to the defined values like `Status.SUCCESS` is the
+ * best way to handle the status. The {@link Result.verify} method can also
+ * be used to return either a successful result, or throw an exception
+ * representing the problem.
+ *
+ * The top-level fields all represent the process of generating the result.
+ * These describe if the operation was successful, how caching was involved,
+ * and the operations used by either the client or server. Most top-level
+ * fields are optionally `null`, and may not be filled in, especially if the
+ * result was a failure.
+ *
+ * The `media` attribute represents all data collected about the media in a
+ * {@link Media} value. This describes file size, the mime type, and more.
+ *
+ * This data is consistent and repeatable. When requesting data that has been
+ * cached by either the client or the server, the result will reuse the same
+ * media value that has been returned previously.
+ *
+ * The media also contains a `thumbnail` attribute which represents the JPEG
+ * encoded binary data for the thumbnail image.
+ *
+ * Only the {@link Client} methods generate Result values. They are intended
+ * to be immutable and constant. This is the same for the Media attribute.
+ *
+ * The `raw` attribute represents the raw JSON data returned by the server,
+ * although the thumbnail binary data is removed for efficiency.
+ *
+ * See https://thumbrella.dev/docs/result for full documentation.
+ */
 export class Result {
   url: string;
   status: string;
@@ -309,7 +314,7 @@ export class Result {
       status: Status.UNAVAILABLE,
       source: Source.CLIENT,
       message,
-      media: { file_size: 9, kind: FileKind.UNKNOWN, extension: "", mime: "", thumbnail: _FAILED_B64 },
+      media: { file_size: 0, kind: FileKind.UNKNOWN, extension: "", mime: "", thumbnail: _FAILED_B64 },
     });
   }
 

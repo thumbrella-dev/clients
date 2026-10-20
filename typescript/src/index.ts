@@ -1,5 +1,11 @@
 export { Client, parseConnect } from "./api.js";
-export { MemoryCache, putAllCaches, createMemoryCache } from "./cache.js";
+export {
+  MemoryCache,
+  mediaFromCaches,
+  putAllCaches,
+  removeFromCaches,
+  createMemoryCache,
+} from "./cache.js";
 export type { Cache, CacheBackend } from "./cache.js";
 export {
   Result,

@@ -7,27 +7,44 @@
  */
 
 import { Client } from "./api.js";
+import type { Cache } from "./cache.js";
+import { MemoryCache } from "./cache.js";
 import { Result, Status } from "./types.js";
 
-// Shared client
+// Shared clients, one per connect string
 
-let _sharedClient: Client | null = null;
+const _clients = new Map<string, Client>();
 
 /**
- * Get (or create) a shared Thumbrella {@link Client} for the page.
+ * One result cache shared by every client created here.
+ *
+ * Caches are keyed by media URL, not by server, so switching connect strings
+ * keeps every thumbnail already fetched.  A per-client cache would throw the
+ * whole collection away on each `tbrSetup()` call.
+ */
+const _sharedCaches: Cache[] = [new MemoryCache()];
+
+/**
+ * Get (or create) a shared Thumbrella {@link Client}.
  *
  * @param connect  Optional connect string (falls back to `window.TBR_CONNECT`).
+ *
+ * Clients are keyed by connect string: a page that switches servers at
+ * runtime gets a client for the new one instead of silently reusing the
+ * client created for the first.  All of them share one result cache.
  */
 export function getClient(connect?: string): Client {
-  if (!_sharedClient) {
-    _sharedClient = new Client({
-      connect: connect ??
-        (typeof window !== "undefined"
-          ? (window as unknown as Record<string, string>).TBR_CONNECT
-          : undefined),
-    });
+  const target = connect ??
+    (typeof window !== "undefined"
+      ? (window as unknown as Record<string, string>).TBR_CONNECT
+      : undefined);
+  const key = target || "__default__";
+  let client = _clients.get(key);
+  if (!client) {
+    client = new Client({ connect: target, caches: _sharedCaches });
+    _clients.set(key, client);
   }
-  return _sharedClient;
+  return client;
 }
 
 // Batched client — coalesces individual URL requests into batch HTTP calls
@@ -41,6 +58,7 @@ export function getClient(connect?: string): Client {
 function createAsyncQueue<T>(): {
   push: (item: T) => void;
   done: () => void;
+  readonly closed: boolean;
   iter: AsyncIterableIterator<T>;
 } {
   const buffer: T[] = [];
@@ -78,6 +96,7 @@ function createAsyncQueue<T>(): {
 
   return {
     push(item: T) {
+      if (finished) return;
       if (waiter) {
         waiter({ value: item, done: false });
         waiter = null;
@@ -86,11 +105,15 @@ function createAsyncQueue<T>(): {
       }
     },
     done() {
+      if (finished) return;
       finished = true;
       if (waiter) {
         waiter({ value: undefined as unknown as T, done: true });
         waiter = null;
       }
+    },
+    get closed() {
+      return finished;
     },
     iter,
   };
@@ -125,8 +148,8 @@ export const BATCH_LIMIT = 12;
 export class BatchedClient {
   readonly #client: Client;
   readonly limit: number;
-  /** Every unfinished URL, queued or in flight. */
-  #active = new Map<string, ReturnType<typeof createAsyncQueue<Result>>>();
+  /** Every unfinished URL, queued or in flight, and its subscribers. */
+  #active = new Map<string, Set<ReturnType<typeof createAsyncQueue<Result>>>>();
   #queue: string[] = [];
   #inflight = 0;
   #lastSend = 0;
@@ -150,13 +173,19 @@ export class BatchedClient {
    * here.
    */
   streamUrl(url: string): AsyncIterableIterator<Result> {
-    const existing = this.#active.get(url);
-    if (existing) return existing.iter;
-
     const q = createAsyncQueue<Result>();
-    this.#active.set(url, q);
-    this.#queue.push(url);
-    this.#schedule(0);
+    let subs = this.#active.get(url);
+    if (!subs) {
+      subs = new Set();
+      this.#active.set(url, subs);
+      this.#queue.push(url);
+      this.#schedule(0);
+    }
+    // A URL already in flight serves this subscriber too.  Handing back the
+    // iterator of an existing queue would split one result between two
+    // consumers — each `next()` settles a single waiter — leaving the second
+    // element waiting for a result that had already been delivered.
+    subs.add(q);
     return q.iter;
   }
 
@@ -187,10 +216,19 @@ export class BatchedClient {
 
   async #run(batch: string[]): Promise<void> {
     const open = new Set(batch);
+    const send = (url: string, result: Result): void => {
+      for (const q of this.#active.get(url) ?? []) {
+        if (!q.closed) q.push(result);
+      }
+    };
     const finish = (url: string, result?: Result): void => {
-      const q = this.#active.get(url);
-      if (result) q?.push(result);
-      q?.done();
+      const subs = this.#active.get(url);
+      if (subs) {
+        for (const q of subs) {
+          if (result && !q.closed) q.push(result);
+          if (!q.closed) q.done();
+        }
+      }
       this.#active.delete(url);
       if (open.delete(url)) {
         this.#inflight--;
@@ -202,7 +240,7 @@ export class BatchedClient {
       for await (const result of this.#client.stream(batch)) {
         if (!open.has(result.url)) continue;
         if (result.status === Status.INTERMEDIATE) {
-          this.#active.get(result.url)?.push(result);
+          send(result.url, result);
         } else {
           finish(result.url, result);
         }
