@@ -305,7 +305,6 @@ export class Client {
     const pending = new Set(stale.map((s) => s.url));
     const body = JSON.stringify({ items: stale });
     const url = `${this.baseUrl}/batch`;
-
     try {
       const resp = await fetch(url, {
         method: "POST",
@@ -339,36 +338,31 @@ export class Client {
         for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed) continue;
-          try {
-            const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-            const resultData = parseBatchLine(parsed);
-            if (!resultData) continue;
-            const itemUrl = resultData.url as string | undefined;
-            // Only a terminal result completes a URL. Intermediate results must
-            // not remove the URL from `pending`, otherwise an interrupted stream
-            // leaves that element stuck in the loading state forever.
-            if (itemUrl && resultData.status !== Status.INTERMEDIATE) pending.delete(itemUrl);
-            yield await resultFromServer(resultData, this.caches, this.baseUrl, url);
-          } catch {
-            // skip malformed lines
-          }
+          const resultData = parseBatchLine(trimmed);
+          if (!resultData) continue;
+          const result = await resultFromServer(resultData, this.caches, this.baseUrl, url);
+          const itemUrl = resultData.url as string | undefined;
+          // Only a terminal result completes a URL. Intermediate results must
+          // not remove the URL from `pending`, otherwise an interrupted stream
+          // leaves that element stuck in the loading state forever.
+          if (itemUrl && resultData.status !== Status.INTERMEDIATE) pending.delete(itemUrl);
+          yield result;
         }
       }
       if (buffer.trim()) {
-        try {
-          const parsed = JSON.parse(buffer.trim());
-          const resultData = parseBatchLine(parsed);
-          if (resultData) {
-            const itemUrl = resultData.url as string | undefined;
-            if (itemUrl && resultData.status !== Status.INTERMEDIATE) pending.delete(itemUrl);
-            yield await resultFromServer(resultData, this.caches, this.baseUrl, url);
-          }
-        } catch {
-          // ignore
+        const resultData = parseBatchLine(buffer.trim());
+        if (resultData) {
+          const result = await resultFromServer(resultData, this.caches, this.baseUrl, url);
+          const itemUrl = resultData.url as string | undefined;
+          if (itemUrl && resultData.status !== Status.INTERMEDIATE) pending.delete(itemUrl);
+          yield result;
         }
       }
-    } catch {
-      // stream interrupted
+    } catch (error) {
+      for (const url of pending) {
+        yield Result.clientFail(url, `stream connection lost: ${error}`);
+      }
+      pending.clear();
     }
 
     for (const url of pending) {
@@ -557,8 +551,16 @@ function placeholderThumb(
 }
 
 /** Validate that a parsed JSON object is a streaming result (must have url + status). */
-function parseBatchLine(parsed: Record<string, unknown>): Record<string, unknown> | null {
-  if (typeof parsed.url === "string" && typeof parsed.status === "string") {
+function parseBatchLine(line: string): Record<string, unknown> | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch (error) {
+    if (error instanceof SyntaxError) return null;
+    throw error;
+  }
+  if (typeof parsed === "object" && parsed !== null && "url" in parsed && "status" in parsed
+    && typeof parsed.url === "string" && typeof parsed.status === "string") {
     return parsed;
   }
   return null;

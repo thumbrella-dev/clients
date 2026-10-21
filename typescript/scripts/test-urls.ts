@@ -340,6 +340,42 @@ async function testIntermediateDoesNotWinCache(): Promise<void> {
   );
 }
 
+async function testStreamWithoutDeadline(): Promise<void> {
+  const url = "https://media.test/stream";
+  globalThis.fetch = async (_input, init) => {
+    assert.equal(init?.signal, undefined, "stream requests have no client-imposed deadline");
+    return new Response('malformed\nnull\n{}\n' + JSON.stringify({
+      url, status: Status.SUCCESS, media: { thumbnail: "AQID" },
+    }));
+  };
+  const client = new Client({ connect: "https://server.test", caches: [] });
+  const [result] = await client.batch([url]);
+  assert.equal(result.status, Status.SUCCESS, "malformed lines do not prevent a valid result");
+}
+
+async function testStreamCacheFailure(): Promise<void> {
+  const url = "https://media.test/cache-failure";
+  for (const ending of ["\n", ""]) {
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      url, status: Status.SUCCESS, media: { thumbnail: "AQID" },
+    }) + ending);
+    const client = new Client({
+      connect: "https://cache-failure.test",
+      caches: [{
+        get: () => undefined,
+        set: () => { throw new Error("backend write failed"); },
+        reset: () => {},
+      }],
+    });
+    const results: Result[] = [];
+    for await (const result of client.stream([url])) results.push(result);
+    assert.equal(results.length, 1, "cache errors must not discard a terminal result");
+    assert.equal(results[0].url, url);
+    assert.equal(results[0].status, Status.UNAVAILABLE);
+    assert.match(results[0].message ?? "", /backend write failed/);
+  }
+}
+
 async function main(): Promise<void> {
   try {
     await testRemoveFromCaches();
@@ -352,6 +388,8 @@ async function main(): Promise<void> {
     await testClientKeying();
     await testFailuresAreNotCachedFresh();
     await testIntermediateDoesNotWinCache();
+    await testStreamWithoutDeadline();
+    await testStreamCacheFailure();
     console.log("URL identity, revalidation and batch fan-out passed");
   } finally {
     globalThis.fetch = originalFetch;

@@ -6,6 +6,8 @@
 - Browser tbrSetup properly registers caches  /typescript
 - Use cleaned urls for cache lookups  /typescript /python /rust
 - Add Client connect attribute  /typescript /python /rust
+- Fix shared batched client selection after connection changes  /typescript
+- Preserve terminal results on cache errors; streaming has no client-imposed timeout  /typescript
 
 
 ## 2.0.0 - 2026/10/11

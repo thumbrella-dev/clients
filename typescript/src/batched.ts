@@ -279,9 +279,9 @@ export class BatchedClient {
   }
 }
 
-// Singleton batched clients (keyed by connect string)
+// Singleton batched clients (keyed by resolved client)
 
-const _batchedClients = new Map<string, BatchedClient>();
+const _batchedClients = new Map<Client, BatchedClient>();
 
 /**
  * Get (or create) a shared {@link BatchedClient} for the page.
@@ -293,11 +293,11 @@ const _batchedClients = new Map<string, BatchedClient>();
  * @param connect  Optional connect string (falls back to `window.TBR_CONNECT`).
  */
 export function getBatchedClient(connect?: string): BatchedClient {
-  const key = connect || "__default__";
-  let bc = _batchedClients.get(key);
+  const client = getClient(connect);
+  let bc = _batchedClients.get(client);
   if (!bc) {
-    bc = new BatchedClient(getClient(connect));
-    _batchedClients.set(key, bc);
+    bc = new BatchedClient(client);
+    _batchedClients.set(client, bc);
   }
   return bc;
 }

@@ -63,7 +63,6 @@ export function configure(opts: BrowserConfig): void {
   if (opts.connect !== undefined) _config.connect = opts.connect;
   if (opts.caches !== undefined) _config.caches = opts.caches;
   configureClients(opts);
-  configureClients(opts);
 }
 
 // IndexedDB cache
@@ -275,9 +274,6 @@ function createIndexedDbCache(maxMb: number): CacheBackend {
   let dbPromise: Promise<IDBDatabase> | null = null;
 
   function openDb(): Promise<IDBDatabase> {
-    if (typeof indexedDB === "undefined") {
-      return Promise.reject(new DOMException("IndexedDB is unavailable", "NotSupportedError"));
-    }
     if (typeof indexedDB === "undefined") {
       return Promise.reject(new DOMException("IndexedDB is unavailable", "NotSupportedError"));
     }

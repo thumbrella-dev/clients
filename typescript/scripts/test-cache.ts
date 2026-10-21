@@ -20,6 +20,7 @@ import {
   configure,
   createBrowserCache,
   enablePersistentCache,
+  getBatchedClient,
   getClient,
   tbrSetup,
 } from "../src/browser.js";
@@ -284,11 +285,22 @@ async function testBrowserWiring(): Promise<void> {
     assert.equal(definitions, 1);
 
     const configured = getClient("https://persist.test");
+    const batched = getBatchedClient();
+    assert.equal(batched.client, configured);
+    assert.equal(getBatchedClient(configured.connect), batched);
+    const other = tbrSetup("https://other.test");
+    assert.equal(getBatchedClient().client, other);
+    assert.notEqual(getBatchedClient(), batched);
+    tbrSetup(configured.connect);
+    assert.equal(getBatchedClient(), batched);
     assert.equal(configured.cachesList.length, 2);
     assert.equal(getClient("https://other.test").cachesList.length, 2);
     assert.notEqual(configured, getClient("https://other.test"));
     const empty = tbrSetup("");
     assert.equal(empty.connect, "");
+    assert.equal(getBatchedClient().client, empty);
+    assert.equal(getBatchedClient(""), getBatchedClient());
+    assert.notEqual(getBatchedClient(), batched);
     await assert.rejects(empty.verify(), VerifyError);
 
     const persistent = enablePersistentCache();
