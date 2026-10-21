@@ -10,85 +10,45 @@
 //!
 //! See <https://thumbrella.dev/docs/cache> for full documentation.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::types::Media;
 
-/// Stable HTTP cache identity; non-HTTP and malformed URLs are unchanged.
-pub(crate) fn canonical_url(raw: &str) -> String {
-    let Ok(mut url) = reqwest::Url::parse(raw) else {
-        return raw.to_string();
+/// Canonical cache key for a URL.
+///
+/// HTTP(S) URLs drop the query and fragment and lowercase the scheme and host,
+/// so signed variants of one object share an entry. Other values are used
+/// unchanged.
+fn cache_key(url: &str) -> Cow<'_, str> {
+    let Some(sep) = url.find("://") else {
+        return Cow::Borrowed(url);
     };
-    if !matches!(url.scheme(), "http" | "https") || !raw.contains("://") {
-        return raw.to_string();
+    let scheme = &url[..sep];
+    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+        return Cow::Borrowed(url);
     }
-    let mut pairs: Vec<(String, String)> =
-        url.query_pairs().map(|(key, value)| (key.into_owned(), value.into_owned())).collect();
-    let sas = pairs.iter().any(|(key, _)| key.eq_ignore_ascii_case("sig"));
-    pairs.retain(|(key, _)| {
-        let key = key.to_ascii_lowercase();
-        !matches!(
-            key.as_str(),
-            "auth"
-                | "authorization"
-                | "token"
-                | "access_token"
-                | "auth_token"
-                | "api_key"
-                | "apikey"
-                | "signature"
-                | "sig"
-                | "credential"
-                | "security_token"
-                | "expires"
-                | "expiry"
-                | "awsaccesskeyid"
-                | "googleaccessid"
-                | "policy"
-                | "key-pair-id"
-        ) && !key.starts_with("x-amz-")
-            && !key.starts_with("x-goog-")
-            && !(sas
-                && matches!(
-                    key.as_str(),
-                    "sv" | "ss"
-                        | "srt"
-                        | "sp"
-                        | "se"
-                        | "st"
-                        | "spr"
-                        | "sip"
-                        | "sr"
-                        | "si"
-                        | "skoid"
-                        | "sktid"
-                        | "skt"
-                        | "ske"
-                        | "sks"
-                        | "skv"
-                        | "saoid"
-                        | "suoid"
-                        | "scid"
-                ))
-    });
-    url.set_fragment(None);
-    url.set_query(None);
-    if !pairs.is_empty() {
-        url.query_pairs_mut().extend_pairs(pairs);
-    }
-    url.to_string()
+
+    let rest = &url[sep + 3..];
+    let rest = rest.split('#').next().unwrap_or(rest);
+    let rest = rest.split('?').next().unwrap_or(rest);
+    let (host, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, ""),
+    };
+    Cow::Owned(format!("{}://{}{}", scheme.to_ascii_lowercase(), host.to_ascii_lowercase(), path))
 }
 
-/// Abstract base for result caches, stores [`Media`] entries keyed by URL.
+/// Abstract base for result caches, stores [`Media`] entries under opaque keys.
 pub trait Cache: Send + Sync {
-    /// Get the possible cached media for a URL.
-    fn get(&self, url: &str) -> Option<Media>;
-    /// Store cached media for a URL.
-    fn put(&self, media: &Media);
-    /// Remove possible cached media for a URL.
-    fn remove(&self, url: &str);
-    /// Clear all cached URLs and reset statistics.
+    /// Get media stored under `key`.
+    fn get(&self, key: &str) -> Option<Media>;
+    /// Store `media` under `key`.
+    fn put(&self, key: &str, media: &Media);
+    /// Remove the entry stored under `key`.
+    fn remove(&self, key: &str);
+    /// Clear all entries and reset statistics.
     fn reset(&self);
     /// Number of cached entries.
     fn len(&self) -> usize;
@@ -142,15 +102,14 @@ impl Default for MemoryCache {
 }
 
 impl Cache for MemoryCache {
-    fn get(&self, url: &str) -> Option<Media> {
-        let url = canonical_url(url);
+    fn get(&self, key: &str) -> Option<Media> {
         let store = self.store.lock().unwrap();
-        match store.get(&url) {
+        match store.get(key) {
             Some(media) => {
                 *self.hits_count.lock().unwrap() += 1;
                 let mut order = self.order.lock().unwrap();
-                order.retain(|u| u != &url);
-                order.insert(0, url);
+                order.retain(|u| u != key);
+                order.insert(0, key.to_string());
                 Some(media.clone())
             }
             None => {
@@ -160,26 +119,24 @@ impl Cache for MemoryCache {
         }
     }
 
-    fn put(&self, media: &Media) {
-        let url = canonical_url(&media.url);
+    fn put(&self, key: &str, media: &Media) {
         let mut store = self.store.lock().unwrap();
         let mut order = self.order.lock().unwrap();
 
-        if store.contains_key(&url) {
-            order.retain(|u| u != &url);
+        if store.contains_key(key) {
+            order.retain(|u| u != key);
         } else if store.len() >= self.max_items
             && let Some(stale) = order.pop()
         {
             store.remove(&stale);
         }
-        store.insert(url.clone(), media.clone());
-        order.insert(0, url);
+        store.insert(key.to_string(), media.clone());
+        order.insert(0, key.to_string());
     }
 
-    fn remove(&self, url: &str) {
-        let url = canonical_url(url);
-        self.store.lock().unwrap().remove(&url);
-        self.order.lock().unwrap().retain(|u| u != &url);
+    fn remove(&self, key: &str) {
+        self.store.lock().unwrap().remove(key);
+        self.order.lock().unwrap().retain(|u| u != key);
     }
 
     fn reset(&self) {
@@ -202,55 +159,74 @@ impl Cache for MemoryCache {
     }
 }
 
+/// Get cached media for a raw URL from a stack of caches.
+///
+/// The URL is canonicalised once, so every cache in the stack sees the same
+/// key. A fresh entry wins over a stale one; otherwise the first entry found
+/// is returned so its `cache` token can be used for revalidation.
+pub fn media_from_caches(caches: &[Box<dyn Cache>], url: &str) -> Option<Media> {
+    let key = cache_key(url);
+    let mut stale = None;
+    for cache in caches {
+        if let Some(media) = cache.get(key.as_ref()) {
+            if media.is_fresh() {
+                return Some(media);
+            }
+            if stale.is_none() {
+                stale = Some(media);
+            }
+        }
+    }
+    stale
+}
+
+/// Store media in every cache under the raw URL's canonical key.
+pub fn put_all_caches(caches: &[Box<dyn Cache>], url: &str, media: &Media) {
+    let key = cache_key(url);
+    for cache in caches {
+        cache.put(key.as_ref(), media);
+    }
+}
+
+/// Remove a raw URL from every cache in a stack.
+pub fn remove_from_caches(caches: &[Box<dyn Cache>], url: &str) {
+    let key = cache_key(url);
+    for cache in caches {
+        cache.remove(key.as_ref());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn canonical_keys() {
-        for (raw, expected) in [
-            ("HTTPS://MEDIA.test/a?size=large&TOKEN=one#part", "https://media.test/a?size=large"),
-            ("https://media.test/a?X-Amz-Signature=a&X-Amz-Date=b&v=2", "https://media.test/a?v=2"),
-            (
-                "https://media.test/a?X-Goog-Credential=a&X-Goog-Expires=1&v=2",
-                "https://media.test/a?v=2",
-            ),
-            ("https://media.test/a?AWSAccessKeyId=a&Signature=b&Expires=1", "https://media.test/a"),
-            (
-                "https://media.test/a?sv=1&sp=r&sig=a&se=tomorrow&width=2",
-                "https://media.test/a?width=2",
-            ),
-            ("https://media.test/a?sv=1&width=2", "https://media.test/a?sv=1&width=2"),
-            (
-                "https://media.test/a?token=a&token=b&v=2&v=3&empty=",
-                "https://media.test/a?v=2&v=3&empty=",
-            ),
-            ("https://media.test/a?%74oken=a&v=2", "https://media.test/a?v=2"),
-            ("https://media.test/a?b=2&a=1", "https://media.test/a?b=2&a=1"),
-            ("https://media.test/a?q=a%20b&token=one", "https://media.test/a?q=a+b"),
-            ("https://media.test/a?q=a%20b", "https://media.test/a?q=a+b"),
-            ("https://MEDIA.test:443?token=one", "https://media.test/"),
-            ("file:///tmp/a?token=keep#part", "file:///tmp/a?token=keep#part"),
-            ("/tmp/a?token=keep", "/tmp/a?token=keep"),
-            ("https://[invalid", "https://[invalid"),
-            ("https://media.test:invalid/a", "https://media.test:invalid/a"),
-        ] {
-            assert_eq!(canonical_url(raw), expected, "{raw}");
-            assert_eq!(canonical_url(&canonical_url(raw)), expected, "{raw}");
-        }
+    fn cache_key_follows_the_shared_rules() {
+        assert_eq!(cache_key("HTTP://Host").as_ref(), "http://host");
+        assert_eq!(
+            cache_key("https://CDN.Example.com/Path/File.JPG?x=1#frag").as_ref(),
+            "https://cdn.example.com/Path/File.JPG"
+        );
+        assert_eq!(cache_key("ftp://Host/Path?x#frag").as_ref(), "ftp://Host/Path?x#frag");
+        assert_eq!(cache_key("/local/path").as_ref(), "/local/path");
     }
 
     #[test]
-    fn memory_cache_lookup_and_removal() {
-        let cache = MemoryCache::default();
+    fn signed_variants_share_one_entry() {
+        let caches: Vec<Box<dyn Cache>> = vec![Box::new(MemoryCache::default())];
+        let a = "https://CDN.Example.com/path/File.JPG?X-Amz-Signature=aaa#frag";
+        let b = "https://cdn.example.com/path/File.JPG?X-Amz-Signature=bbb";
         let media = Media {
-            url: "https://media.test/a?v=2&token=one".into(),
-            ..Media::default()
+            url: a.to_string(),
+            cache: "1:tok".to_string(),
+            ..Default::default()
         };
-        cache.put(&media);
-        assert_eq!(cache.get("https://media.test/a?v=2&token=two").unwrap().url, media.url);
-        assert!(cache.get("https://media.test/a?v=3").is_none());
-        cache.remove("https://media.test/a?v=2&token=three");
-        assert!(cache.is_empty());
+
+        put_all_caches(&caches, a, &media);
+        assert_eq!(caches[0].len(), 1);
+        assert!(media_from_caches(&caches, b).is_some());
+
+        remove_from_caches(&caches, b);
+        assert_eq!(caches[0].len(), 0);
     }
 }

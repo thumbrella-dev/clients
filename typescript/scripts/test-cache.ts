@@ -1,8 +1,28 @@
+/**
+ * test-cache.ts - persistent/byte cache backends and browser cache wiring.
+ *
+ *   npm run test
+ */
+
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import "fake-indexeddb/auto";
-import { Client, MemoryCache, Media, Source, canonicalUrl, createMemoryCache } from "../src/index.js";
-import { configure, createBrowserCache, enablePersistentCache, getClient, getBatchedClient, tbrSetup } from "../src/browser.js";
+import {
+  Client,
+  Media,
+  MemoryCache,
+  Source,
+  VerifyError,
+  createMemoryCache,
+  putAllCaches,
+  removeFromCaches,
+} from "../src/index.js";
+import {
+  configure,
+  createBrowserCache,
+  enablePersistentCache,
+  getClient,
+  tbrSetup,
+} from "../src/browser.js";
 
 const freshToken = `${(Math.floor(Date.now() / 1000) + 3600).toString(16)}:test`;
 const staleToken = "1:test";
@@ -20,40 +40,7 @@ function media(cache = freshToken): Record<string, unknown> {
   };
 }
 
-test("canonical keys strip credentials but preserve content query parameters", () => {
-  const cases = [
-    ["HTTPS://MEDIA.test/model.glb?size=large&TOKEN=one#part", "https://media.test/model.glb?size=large"],
-    ["https://media.test/a?X-Amz-Signature=a&X-Amz-Date=b&v=2", "https://media.test/a?v=2"],
-    ["https://media.test/a?X-Goog-Credential=a&X-Goog-Expires=10&v=2", "https://media.test/a?v=2"],
-    ["https://media.test/a?AWSAccessKeyId=a&Signature=b&Expires=1", "https://media.test/a"],
-    ["https://media.test/a?sv=1&sp=r&sig=a&se=tomorrow&width=2", "https://media.test/a?width=2"],
-    ["https://media.test/a?sv=1&width=2", "https://media.test/a?sv=1&width=2"],
-    ["https://media.test/a?token=a&token=b&width=2&width=3", "https://media.test/a?width=2&width=3"],
-    ["https://media.test/a?%74oken=a&v=2", "https://media.test/a?v=2"],
-    ["https://media.test/a?b=2&a=1", "https://media.test/a?b=2&a=1"],
-    ["https://media.test/a?q=a%20b&token=one", "https://media.test/a?q=a+b"],
-    ["https://media.test/a?q=a%20b", "https://media.test/a?q=a+b"],
-    ["file:///tmp/a?token=keep#part", "file:///tmp/a?token=keep#part"],
-    ["/tmp/a?token=keep", "/tmp/a?token=keep"],
-    ["https://[invalid", "https://[invalid"],
-  ];
-  for (const [input, expected] of cases) {
-    assert.equal(canonicalUrl(input), expected, input);
-    assert.equal(canonicalUrl(canonicalUrl(input)), expected, input);
-  }
-});
-
-test("MemoryCache lookup and removal use canonical keys", () => {
-  const cache = new MemoryCache();
-  const item = new Media({ ...media(), url: "https://media.test/a?token=one&v=2" });
-  cache.put(item);
-  assert.equal(cache.get("https://media.test/a?token=two&v=2"), item);
-  assert.equal(cache.get("https://media.test/a?v=3"), undefined);
-  cache.remove("https://media.test/a?token=three&v=2");
-  assert.equal(cache.size, 0);
-});
-
-test("client media and byte caches preserve request URLs, metadata and revalidation", async () => {
+async function testByteBackends(): Promise<void> {
   const originalFetch = globalThis.fetch;
   try {
     for (const cache of [new MemoryCache(), createMemoryCache(), createBrowserCache()]) {
@@ -62,20 +49,26 @@ test("client media and byte caches preserve request URLs, metadata and revalidat
       let token = freshToken;
       let notModified = false;
       globalThis.fetch = async (_input, init) => {
-        const { items } = JSON.parse(String(init?.body)) as { items: { url: string; cache?: string }[] };
+        const { items } = JSON.parse(String(init?.body)) as {
+          items: { url: string; cache?: string }[];
+        };
         requests.push(items);
         return new Response(items.map(({ url }) => JSON.stringify({
-          url, status: "success",
+          url,
+          status: "success",
           source: notModified ? "not_modified" : "render",
           ...(notModified ? {} : { media: media(token) }),
         })).join("\n"));
       };
+
       const client = new Client({ connect: "https://server.test", caches: [cache] });
       const first = "https://media.test/model.glb?v=2&token=one#part";
       const second = "https://media.test/model.glb?v=2&token=two";
+
       const result = await client.thumb(first);
       assert.equal(result.url, first);
       assert.equal(requests[0][0].url, first);
+
       const hit = await client.thumb(second);
       assert.equal(hit.url, second);
       assert.equal(hit.source, Source.CACHE);
@@ -85,9 +78,14 @@ test("client media and byte caches preserve request URLs, metadata and revalidat
       assert.equal(hit.media?.fileSize, 1234);
       assert.deepEqual(hit.media?.thumbnail.bytes, new Uint8Array([1, 2, 3]));
       assert.equal(requests.length, 1);
-      const restored = await new Client({ connect: "https://server.test", caches: [cache] }).thumb(second);
+
+      const restored = await new Client({
+        connect: "https://server.test",
+        caches: [cache],
+      }).thumb(second);
       assert.equal(restored.source, Source.CACHE);
-      await client.thumb("https://media.test/model.glb?v=3&token=three");
+
+      await client.thumb("https://media.test/other.glb");
       assert.equal(requests.length, 2);
 
       client.resetCaches();
@@ -103,9 +101,9 @@ test("client media and byte caches preserve request URLs, metadata and revalidat
   } finally {
     globalThis.fetch = originalFetch;
   }
-});
+}
 
-test("empty cache stacks disable caching and unavailable storage does not block requests", async () => {
+async function testEmptyAndFailingCaches(): Promise<void> {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
   const warnings: unknown[][] = [];
@@ -115,15 +113,18 @@ test("empty cache stacks disable caching and unavailable storage does not block 
     requests++;
     const { items } = JSON.parse(String(init?.body)) as { items: { url: string }[] };
     return new Response(items.map(({ url }) => JSON.stringify({
-      url, status: "success", media: media(),
+      url,
+      status: "success",
+      media: media(),
     })).join("\n"));
   };
   try {
-    const client = new Client({ connect: "https://server.test", caches: [] });
     const url = "https://media.test/no-cache.glb";
-    await client.thumb(url);
-    await client.thumb(url);
+    const uncached = new Client({ connect: "https://server.test", caches: [] });
+    await uncached.thumb(url);
+    await uncached.thumb(url);
     assert.equal(requests, 2);
+
     const failing = new Client({
       connect: "https://server.test",
       caches: [{
@@ -139,93 +140,181 @@ test("empty cache stacks disable caching and unavailable storage does not block 
     globalThis.fetch = originalFetch;
     console.warn = originalWarn;
   }
-});
+}
 
-test("browser setup wires configured caches into existing and new shared clients", async () => {
-  const oldFetch = globalThis.fetch;
-  const globals = ["window", "document", "customElements"];
+async function testVerifyCoalescing(): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  let respond!: (response: Response) => void;
+  globalThis.fetch = async () => {
+    requests++;
+    return new Promise((resolve) => { respond = resolve; });
+  };
+  try {
+    const client = new Client("https://verify.test");
+    const first = client.verify();
+    const second = client.verify();
+    assert.equal(requests, 1);
+
+    respond(new Response(JSON.stringify({ status: "ok", thumbrella: 2, token: true })));
+    assert.equal(await first, client);
+    assert.equal(await second, client);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+async function testConnectConfiguration(): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  const originalConnect = process.env.TBR_CONNECT;
+  let requests = 0;
+  globalThis.fetch = async () => {
+    requests++;
+    return new Response(JSON.stringify({ status: "ok", thumbrella: 2, token: true }));
+  };
+  try {
+    process.env.TBR_CONNECT = "https://environment.test";
+    assert.equal(new Client().connect, "https://environment.test");
+    const connect = "https://connect.test/,x-custom=value";
+    const client = new Client(connect);
+    assert.equal(client.connect, connect);
+    assert.equal(client.baseUrl, "https://connect.test");
+    assert.equal(await client.verify(), client);
+    const token = "tbr_a_test";
+    assert.equal(new Client(token).connect, token);
+    assert.equal(new Client(token).baseUrl, "https://cloud.thumbrella.dev");
+    for (const empty of ["", " \t\n"]) {
+      for (const client of [new Client(empty), new Client({ connect: empty })]) {
+        assert.equal(client.connect, empty);
+        await assert.rejects(client.verify(), {
+          name: VerifyError.name,
+          message: "Connection string is empty",
+        });
+      }
+    }
+    assert.equal(requests, 1, "empty configuration never makes a request");
+    delete process.env.TBR_CONNECT;
+    const defaultClient = getClient();
+    const emptyClient = getClient("");
+    assert.notEqual(emptyClient, defaultClient);
+    await assert.rejects(emptyClient.verify(), VerifyError);
+    assert.equal(new Client().connect, "https://cloud.thumbrella.dev");
+    assert.equal(requests, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalConnect === undefined) delete process.env.TBR_CONNECT;
+    else process.env.TBR_CONNECT = originalConnect;
+  }
+}
+
+async function testStackRemoval(): Promise<void> {
+  const cache = createMemoryCache();
+  const url = "https://media.test/remove.glb?token=one";
+  const key = "https://media.test/remove.glb";
+  await putAllCaches([cache], url, new Media({ url, thumbnail: "AQID" }));
+  assert.ok(await cache.get(key));
+  await removeFromCaches([cache], url.replace("one", "two"));
+  assert.equal(await cache.get(key), undefined);
+}
+
+async function testIndexedDbBudget(): Promise<void> {
+  const cache = createBrowserCache(12 / (1024 * 1024));
+  cache.reset();
+  await cache.get("a");
+
+  await cache.set("a", new Uint8Array(6));
+  await cache.set("b", new Uint8Array(6));
+  await cache.set("a", new Uint8Array(6));
+  assert.equal((await cache.get("a"))?.length, 6);
+  assert.equal((await cache.get("b"))?.length, 6);
+
+  await cache.set("c", new Uint8Array(6));
+  assert.equal(await cache.get("a"), undefined);
+  assert.equal((await cache.get("b"))?.length, 6);
+  assert.equal((await cache.get("c"))?.length, 6);
+
+  await cache.set("b", new Uint8Array(8));
+  assert.equal((await cache.get("b"))?.length, 8);
+  assert.equal(await cache.get("c"), undefined);
+
+  await assert.rejects(
+    async () => cache.set("oversized", new Uint8Array(13)),
+    RangeError,
+  );
+
+  await cache.set("removed", new Uint8Array(2));
+  await cache.remove("removed");
+  assert.equal(await cache.get("removed"), undefined);
+}
+
+async function testBrowserWiring(): Promise<void> {
+  const globals = ["window", "document", "customElements"] as const;
   const descriptors = globals.map((key) => Object.getOwnPropertyDescriptor(globalThis, key));
   let definitions = 0;
+
   Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
   Object.defineProperty(globalThis, "document", {
     configurable: true,
     value: {
-      currentScript: { dataset: { tbrConnect: "https://setup.test", tbrPersist: "1" } },
+      currentScript: { dataset: { tbrConnect: "https://persist.test", tbrPersist: "1" } },
       getElementById: () => null,
       createElement: () => ({}),
       head: { appendChild: () => {} },
     },
   });
   Object.defineProperty(globalThis, "customElements", {
-    configurable: true, value: { define: () => { definitions++; } },
+    configurable: true,
+    value: { define: () => { definitions++; } },
   });
-  try {
-    getBatchedClient("https://setup.test");
-    tbrSetup({ persist: -1 });
-    assert.fail("invalid persistence should throw");
-  } catch (error) {
-    assert.ok(error instanceof RangeError);
-  }
-  try {
-    tbrSetup();
-    assert.equal(definitions, 1);
-    tbrSetup();
-    assert.equal(definitions, 1);
-    const client = getClient();
-    assert.equal(client, getBatchedClient("https://setup.test").client);
-    assert.equal(client.cachesList.length, 2);
-    assert.equal(getClient("https://other.test").baseUrl, "https://other.test");
-    assert.notEqual(client, getClient("https://other.test"));
-    const persistent = enablePersistentCache();
-    assert.equal(client.cachesList.length, 2);
 
-    let calls = 0;
-    globalThis.fetch = async (_input, init) => {
-      calls++;
-      const { items } = JSON.parse(String(init?.body)) as { items: { url: string }[] };
-      return new Response(items.map(({ url }) => JSON.stringify({
-        url, status: "success", media: media(),
-      })).join("\n"));
-    };
-    const url = "https://media.test/setup.glb?v=2&token=one";
-    for await (const result of getBatchedClient().streamUrl(url)) {
-      assert.equal(result.status, "success");
-    }
-    assert.ok(await persistent.get(canonicalUrl(url)));
-    configure({ caches: [createBrowserCache()] });
-    assert.equal(getClient(), client);
-    const hit = await client.thumb(url.replace("one", "two"));
-    assert.equal(hit.source, Source.CACHE);
-    assert.equal(calls, 1);
+  try {
+    const defaultClient = getClient("https://default.test");
+    assert.ok(defaultClient.cachesList[0] instanceof MemoryCache);
+
     const replacement = createMemoryCache();
     configure({ caches: [replacement] });
+    const client = getClient("https://setup.test");
     assert.deepEqual(client.cachesList, [replacement]);
-    enablePersistentCache();
-    assert.equal(client.cachesList.length, 2);
+
+    assert.throws(() => tbrSetup({ persist: -1 }), RangeError);
+
+    tbrSetup();
+    assert.equal(definitions, 1);
+    tbrSetup();
+    assert.equal(definitions, 1);
+
+    const configured = getClient("https://persist.test");
+    assert.equal(configured.cachesList.length, 2);
+    assert.equal(getClient("https://other.test").cachesList.length, 2);
+    assert.notEqual(configured, getClient("https://other.test"));
+    const empty = tbrSetup("");
+    assert.equal(empty.connect, "");
+    await assert.rejects(empty.verify(), VerifyError);
+
+    const persistent = enablePersistentCache();
+    assert.equal(configured.cachesList.length, 2);
+    assert.ok(configured.cachesList.includes(persistent));
   } finally {
-    globalThis.fetch = oldFetch;
-    globals.forEach((key, i) => {
-      if (descriptors[i]) Object.defineProperty(globalThis, key, descriptors[i]!);
+    globals.forEach((key, index) => {
+      const descriptor = descriptors[index];
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
       else Reflect.deleteProperty(globalThis, key);
     });
   }
-});
+}
 
-test("IndexedDB enforces its byte budget without evicting unrelated entries on overwrite", async () => {
-  const cache = createBrowserCache(12 / (1024 * 1024));
-  cache.reset();
-  // Await a read to ensure the queued reset transaction has committed.
-  await cache.get("a");
-  await cache.set("a", new Uint8Array(6));
-  await cache.set("b", new Uint8Array(6));
-  await cache.set("a", new Uint8Array(6));
-  assert.equal((await cache.get("b"))?.length, 6);
-  await cache.set("c", new Uint8Array(6));
-  assert.equal(await cache.get("a"), undefined);
-  assert.equal((await cache.get("b"))?.length, 6);
-  assert.equal((await cache.get("c"))?.length, 6);
-  await cache.set("b", new Uint8Array(8));
-  assert.equal((await cache.get("b"))?.length, 8);
-  assert.equal(await cache.get("c"), undefined);
-  await assert.rejects(async () => cache.set("oversized", new Uint8Array(13)), RangeError);
+async function main(): Promise<void> {
+  await testByteBackends();
+  await testEmptyAndFailingCaches();
+  await testVerifyCoalescing();
+  await testConnectConfiguration();
+  await testStackRemoval();
+  await testIndexedDbBudget();
+  await testBrowserWiring();
+  console.log("Byte caches, IndexedDB budget and browser wiring passed");
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
 });

@@ -24,6 +24,7 @@ class ConnectConfig:
 
     Attributes:
         base_url: Server base URL, without a trailing slash.
+        connect: Full effective connection string.
         host: Host and port, used for logging and backoff tracking.
         source: Where the connect string came from. One of ``"argument"``,
             ``"env"``, or ``"default"``. This is used to explain misconfig-
@@ -31,6 +32,7 @@ class ConnectConfig:
     """
 
     base_url: str
+    connect: str
     host: str
     source: Literal["argument", "env", "default"]
 
@@ -50,13 +52,13 @@ def parse_connect(
 ) -> ConnectConfig:
     """Parse a connect string into a session object.
 
-    When ``connect`` is ``None`` or empty this falls back to the
+    When ``connect`` is ``None`` this falls back to the
     ``$TBR_CONNECT`` environment variable, then to the Thumbrella Cloud
     default. The returned :class:`ConnectConfig` records which of these was
     used so callers can produce errors that match the user's setup.
     """
     source: Literal["argument", "env", "default"]
-    if connect:
+    if connect is not None:
         source = "argument"
     else:
         # Fall back to `$TBR_CONNECT`, then the Thumbrella Cloud default.
@@ -68,11 +70,14 @@ def parse_connect(
             connect = DEFAULT_BASE
             source = "default"
 
+    if not connect.strip():
+        return ConnectConfig("", connect, "", source)
+
     # Bare value, no scheme.  Only auth tokens are valid without a URL.
     if "://" not in connect:
         if _is_auth_token(connect):
             session.headers["Authorization"] = f"Bearer {connect}"
-            return ConnectConfig(DEFAULT_BASE, f"{_DEFAULT_HOST}:0", source)
+            return ConnectConfig(DEFAULT_BASE, connect, f"{_DEFAULT_HOST}:0", source)
         raise ValueError(
             "bare connect string without a URL must be an auth token "
             "(tbr_?_...)"
@@ -98,7 +103,7 @@ def parse_connect(
         else:
             session.headers["x-tbr-handshake"] = segment
 
-    return ConnectConfig(base, host, source)
+    return ConnectConfig(base, connect, host, source)
 
 
 def requests_json(
@@ -199,4 +204,3 @@ def _record_backoff(host: str, throttled: bool) -> None:
         _host_backoff[host] = (time.monotonic() + delay, failures)
     else:
         _host_backoff.pop(host, None)
-

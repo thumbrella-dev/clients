@@ -123,7 +123,7 @@ for more details.
 ### Media
 
 ```rust
-media.url          // String - the original media URL
+media.url          // String - simplified URL; use result.url for identity
 media.mime         // String - "image/jpeg" | "application/pdf" | ...
 media.kind         // String - "image" | "video" | "document" | "geometry" | ...
 media.extension    // String - canonical extension without a dot
@@ -170,20 +170,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 The `image` crate is a dependency of your own application, not of this client.
-
-## Client cache keys
-
-HTTP(S) cache keys normalize the scheme and host and strip fragments and common
-authentication/signing query parameters, using the same credential-name policy
-as the TypeScript client. This includes tokens, signatures, expiry fields,
-AWS/GCS signing parameters, CloudFront credentials, and Azure SAS fields when
-`sig` is present. Other query parameters and their order are preserved, so
-different content variants remain separate. Local paths and non-HTTP URLs
-are unchanged.
-
-Only client cache keys are cleaned: requests still send the full original URL,
-and `result.url` remains the requested URL. Custom caches receive canonical
-lookup keys and canonical URLs on stored media copies.
 
 ## Servers
 

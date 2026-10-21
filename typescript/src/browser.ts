@@ -14,8 +14,9 @@
  * packed CDN copy of element.js has been removed.
  */
 
-import type { CacheBackend } from "./cache.js";
-import { createMemoryCache } from "./cache.js";
+import type { CacheBackend, ClientCache } from "./cache.js";
+import { MemoryCache } from "./cache.js";
+import type { Client } from "./api.js";
 import { Result, Media, EncodedJpeg, Status, Source, FileKind } from "./types.js";
 import { configureClients, getClient, BatchedClient, getBatchedClient } from "./batched.js";
 
@@ -24,7 +25,7 @@ import { configureClients, getClient, BatchedClient, getBatchedClient } from "./
 export { Client, parseConnect } from "./api.js";
 export { Result, Media, EncodedJpeg, Status, Source, FileKind } from "./types.js";
 export { createMemoryCache } from "./cache.js";
-export type { CacheBackend } from "./cache.js";
+export type { CacheBackend, ClientCache } from "./cache.js";
 export { getClient, BatchedClient, getBatchedClient };
 
 // Constants
@@ -44,7 +45,7 @@ export const PLACEHOLDER_SVG =
 
 interface BrowserConfig {
   connect?: string;
-  caches?: CacheBackend[];
+  caches?: ClientCache[];
 }
 
 const _config: BrowserConfig = {};
@@ -61,6 +62,7 @@ const _config: BrowserConfig = {};
 export function configure(opts: BrowserConfig): void {
   if (opts.connect !== undefined) _config.connect = opts.connect;
   if (opts.caches !== undefined) _config.caches = opts.caches;
+  configureClients(opts);
   configureClients(opts);
 }
 
@@ -95,7 +97,7 @@ export function createBrowserCache(maxMb = 5): CacheBackend {
  */
 export function enablePersistentCache(maxMb = 5): CacheBackend {
   _persistentCache ??= createBrowserCache(maxMb);
-  const caches = _config.caches ?? [createMemoryCache()];
+  const caches = _config.caches ?? [new MemoryCache()];
   if (!caches.includes(_persistentCache)) {
     configure({ caches: [...caches, _persistentCache] });
   }
@@ -276,6 +278,9 @@ function createIndexedDbCache(maxMb: number): CacheBackend {
     if (typeof indexedDB === "undefined") {
       return Promise.reject(new DOMException("IndexedDB is unavailable", "NotSupportedError"));
     }
+    if (typeof indexedDB === "undefined") {
+      return Promise.reject(new DOMException("IndexedDB is unavailable", "NotSupportedError"));
+    }
     if (dbPromise) return dbPromise;
     dbPromise = new Promise((resolve, reject) => {
       const req = indexedDB.open(DB_NAME, 1);
@@ -338,6 +343,17 @@ function createIndexedDbCache(maxMb: number): CacheBackend {
       });
     },
 
+    async remove(key: string): Promise<void> {
+      const db = await openDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, "readwrite");
+        tx.objectStore(STORE_NAME).delete(key);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      });
+    },
+
     reset(): void {
       void openDb().then(db => new Promise<void>((resolve, reject) => {
         const tx = db.transaction(STORE_NAME, "readwrite");
@@ -345,7 +361,9 @@ function createIndexedDbCache(maxMb: number): CacheBackend {
         tx.oncomplete = () => resolve();
         tx.onerror = () => reject(tx.error);
         tx.onabort = () => reject(tx.error);
-      })).catch((error: unknown) => console.warn("Thumbrella browser cache reset failed", error));
+      })).catch((error: unknown) => {
+        console.warn("Thumbrella browser cache reset failed", error);
+      });
     },
   };
 }
@@ -542,6 +560,27 @@ export class TbrThumb extends _TbrBase {
   #pending = false;
   #url: string | null = null;
 
+  /* Reflect the two URL attributes as properties.  Without these, `el.src = u`
+     on a custom element only creates an expando: `attributeChangedCallback`
+     never runs, nothing is requested, and the element sits empty forever. */
+  get src(): string | null {
+    return this.getAttribute("src");
+  }
+
+  set src(value: string | null) {
+    if (value === null) this.removeAttribute("src");
+    else this.setAttribute("src", value);
+  }
+
+  get connect(): string | null {
+    return this.getAttribute("connect");
+  }
+
+  set connect(value: string | null) {
+    if (value === null) this.removeAttribute("connect");
+    else this.setAttribute("connect", value);
+  }
+
   constructor() {
     super();
     this.#shadow = this.attachShadow({ mode: "open" });
@@ -567,9 +606,16 @@ export class TbrThumb extends _TbrBase {
       this.#load();
     }
     if (name === "connect") {
-      if (this.#pending) {
-        this.#pending = false;
-      }
+      // A different server means the current image came from the wrong place.
+      // Reset the lifecycle so #load() is willing to run again.
+      this.#loaded = false;
+      this.#pending = false;
+      this.classList.remove(
+        "tbr-loaded", "tbr-requested", "tbr-intermediate",
+        "tbr-has-intermediate", "tbr-success", "tbr-failed",
+        "tbr-overloaded", "tbr-unavailable",
+      );
+      this.#render();
       this.#load();
     }
   }
@@ -598,7 +644,20 @@ export class TbrThumb extends _TbrBase {
     this.#pending = true;
 
     const connect = resolveConnect(this);
-    const batched = getBatchedClient(connect);
+
+    // An unparseable connect string throws in the Client constructor.  Fail
+    // this element rather than leaving an unhandled rejection and a blank box.
+    let batched: BatchedClient;
+    try {
+      batched = getBatchedClient(connect);
+    } catch (err) {
+      this.#pending = false;
+      this.#applyResult(Result.clientFail(
+        this.#url,
+        err instanceof Error ? err.message : "invalid connect string",
+      ));
+      return;
+    }
 
     this.classList.add("tbr-requested");
 
@@ -668,10 +727,13 @@ export interface SetupConfig {
 }
 
 /**
- * Activate Thumbrella on the current page.
+ * Activate Thumbrella on the current page, and return the {@link Client} it
+ * points at.
  *
  * Registers `<tbr-thumb>`, configures global defaults, and injects CSS for
- * styles.  Call once — subsequent calls are no-ops.
+ * styles.  The page setup itself happens once — subsequent calls only move the
+ * connect string — but every call returns the client for that connect string,
+ * so a caller can do `tbrSetup(connect).verify()`.
  *
  * The common case is a connect string:
  * ```ts
@@ -687,38 +749,65 @@ export interface SetupConfig {
  * With no arguments, reads `data-tbr-connect` and `data-tbr-persist` from
  * the loading `<script>` tag if present.
  */
-export function tbrSetup(connectOrOpts?: string | SetupConfig): void {
-  if (_booted || typeof document === "undefined") return;
-
+export function tbrSetup(connectOrOpts?: string | SetupConfig | null): Client {
   const scriptDs = findScript()?.dataset ?? {};
 
-  // Resolve connect: explicit string > opts.connect > script attribute > undefined
-  const explicitConnect = typeof connectOrOpts === "string"
-    ? connectOrOpts
-    : connectOrOpts?.connect ?? scriptDs.tbrConnect;
+  // Resolve the next connect string, but only when the caller actually
+  // supplied one: a no-argument call must not reset a configured page.
+  let next: string | undefined;
+  if (typeof connectOrOpts === "string") next = connectOrOpts;
+  else if (connectOrOpts === null) next = "";
+  else if (connectOrOpts?.connect !== undefined) next = connectOrOpts.connect;
+  else if (!_booted) next = scriptDs.tbrConnect;
 
-  if (explicitConnect && typeof window !== "undefined") {
-    (window as unknown as Record<string, string>).TBR_CONNECT = explicitConnect;
+  // Repeating the same value is a no-op.  A different value affects only
+  // requests made from now on: mounted elements keep their iterator and the
+  // batch already in flight keeps running.  Existing caches are untouched and
+  // shared by every connect string (see getClient).
+  if (next !== undefined && typeof window !== "undefined") {
+    const w = window as unknown as Record<string, string>;
+    if (w.TBR_CONNECT !== next) w.TBR_CONNECT = next;
   }
 
-  const persist = typeof connectOrOpts === "object"
+  // Make sure the shared clients have a cache stack before the first request.
+  // Leave the default (the shared MemoryCache) alone unless the page has
+  // explicitly configured caches or asked for persistence.
+  if (_config.caches !== undefined) {
+    configure({ connect: next, caches: _config.caches });
+  } else {
+    configure({ connect: next });
+  }
+
+  const persist = typeof connectOrOpts === "object" && connectOrOpts !== null
     ? connectOrOpts.persist ?? scriptDs.tbrPersist
     : scriptDs.tbrPersist;
-  configure({ connect: explicitConnect, caches: _config.caches ?? [createMemoryCache()] });
-  if (persist !== undefined && persist !== false && persist !== "false" && persist !== 0 && persist !== "0") {
-    const maxMb = persist === true || persist === "" || persist === "true" ? 5 : Number(persist);
+  if (
+    persist !== undefined && persist !== false && persist !== "false"
+    && persist !== 0 && persist !== "0"
+  ) {
+    const maxMb = persist === true || persist === "" || persist === "true"
+      ? 5
+      : Number(persist);
     if (!Number.isFinite(maxMb) || maxMb <= 0) {
-      throw new RangeError("tbrSetup persist must be a positive number of megabytes or a boolean");
+      throw new RangeError(
+        "tbrSetup persist must be a positive number of megabytes or a boolean",
+      );
     }
     enablePersistentCache(maxMb);
   }
 
-  _booted = true;
-  if (typeof customElements !== "undefined") {
-    customElements.define("tbr-thumb", TbrThumb);
+  if (typeof document !== "undefined" && !_booted) {
+    _booted = true;
+
+    if (typeof customElements !== "undefined") {
+      customElements.define("tbr-thumb", TbrThumb);
+    }
+
+    injectStyles();
   }
 
-  injectStyles();
+  // getClient falls back to window.TBR_CONNECT, which is the value set above.
+  return getClient(next);
 }
 
 //

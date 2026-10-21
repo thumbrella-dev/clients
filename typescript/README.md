@@ -56,31 +56,6 @@ npm operations with
 The `tbrSetup` call registers `<tbr-thumb>` and configures its loading states,
 placeholders, caching, and lazy loading.
 
-An in-memory cache is enabled by default. To also cache complete thumbnail
-results in IndexedDB across page reloads, set a storage budget in megabytes:
-
-```ts
-tbrSetup({ connect: "http://localhost:3114", persist: 10 });
-```
-
-`persist: true` uses 5 MB; `false` or `0` disables persistence. Script-tag
-configuration also accepts `data-tbr-persist="10"`. These caches are shared by
-`<tbr-thumb>`, `getClient()`, and `getBatchedClient()`. Custom byte backends from
-`createMemoryCache()` or `createBrowserCache()` can also be passed directly to
-`new Client({ caches: [...] })`; use `caches: []` to disable client caching.
-
-Client cache keys normalize HTTP(S) URLs and remove fragments and common
-authentication/signing parameters (case-insensitively): `auth`, `authorization`,
-`token`, `access_token`, `auth_token`, `api_key`, `apikey`, `signature`, `sig`,
-`credential`, `security_token`, `expires`, `expiry`, `AWSAccessKeyId`,
-`GoogleAccessId`, `Policy`, `Key-Pair-Id`, and `X-Amz-*`/`X-Goog-*` parameters.
-Azure SAS fields are removed when a `sig` parameter is present. Other query
-parameters and their order are retained, so different content variants keep
-separate cache entries. Local paths and non-HTTP URLs are unchanged.
-The full original URL is always sent to the server and retained in `result.url`.
-The exported `canonicalUrl()` helper exposes this client-side key policy;
-it intentionally differs from the server's current all-query-stripping policy.
-
 ## Quickstart - Node and server
 
 ```ts
@@ -133,7 +108,7 @@ for more details.
 ### Media
 
 ```ts
-media.url          // string - the original media URL
+media.url          // string - informational, canonicalized url
 media.mime         // string - "image/jpeg" | "application/pdf" | ...
 media.kind         // string - "image" | "video" | "document" | "geometry" | ...
 media.extension    // string - canonical extension without a dot
@@ -154,6 +129,14 @@ jpeg.bytes         // Uint8Array - base64-decoded JPEG bytes (lazy, cached)
 jpeg.length        // number - byte count
 jpeg.key           // number - content hash, useful for deduplication
 ```
+
+## Persistent Cache
+
+`new Client({ caches })` accepts a `MemoryCache` or any `CacheBackend`
+(`createMemoryCache`, `createBrowserCache`). `enablePersistentCache()` or
+`tbrSetup({ persist: 10 })` adds IndexedDB persistence on top of the default
+memory cache. Byte backends store serialized `Media` records, so thumbnails
+and their metadata survive reloads.
 
 ## Module Structure
 

@@ -8,9 +8,9 @@ from typing import Any, AsyncIterator, Sequence
 
 import requests
 
-from .cache import Cache, MemoryCache, canonical_url, put_all_caches
+from .cache import Cache, MemoryCache, media_from_caches, put_all_caches
 from .constants import DEFAULT_BASE, HTTP_TIMEOUT, Source, Status, BATCH_MAX_ITEMS
-from .result import Result, Media, EncodedJpeg
+from .result import Result, EncodedJpeg
 from .errors import ConnectionError, TimeoutError, VerifyError, ThumbError
 from .http import parse_connect, requests_json, aio_ndjson
 
@@ -67,6 +67,7 @@ class Client:
         self._asession: Any = None  # lazy aiohttp.ClientSession
         connect_info = parse_connect(connect, self.session)
         self.base_url = connect_info.base_url
+        self.connect = connect_info.connect
         self.host_name = connect_info.host
         self._connect_source = connect_info.source
         self.session.headers["User-Agent"] = _client_user_agent()
@@ -98,6 +99,8 @@ class Client:
         On success this returns itself, to allow method chaining for 
         simplistic use cases.
 
+        An empty or whitespace-only connect string raises without a request.
+
         Usage:
             url = "http://demo.thumbrella.dev/cat.jpeg"
             tbr = thumbrella.Client()
@@ -106,6 +109,8 @@ class Client:
         Raises:
             VerifyError: if the server is unreachable or misconfigured.
         """
+        if not self.connect.strip():
+            raise VerifyError("Connection string is empty")
         try:
             data = requests_json(
                 self.session, self.host_name, self.base_url, "GET", "/health",
@@ -368,15 +373,15 @@ def _result_from_server(
     - ``not_modified`` responses reuse cached :class:`Media` (same instance).
     - Placeholder thumbnails share :class:`EncodedJpeg` blobs across results.
     - Normal results construct fresh objects.
-
-    On success the result's media is stored in all *caches*.
+    - Intermediate frames are not cached; terminal media is stored in all
+      *caches* under the requested URL's canonical key.
     """
     url = item.get("url", "")
     source = item.get("source")
     placeholder = item.get("placeholder")
 
     if source == Source.NOT_MODIFIED:
-        media = _media_from_caches(url, caches)
+        media = media_from_caches(caches, url)
         result = Result(item, media=media) if media else Result(item)
     elif placeholder:
         thumb_b64 = item.get("media", {}).get("thumbnail", "")
@@ -387,18 +392,12 @@ def _result_from_server(
 
     if result.pin is not None:
         result.pin = urljoin(request_url, result.pin)
-    put_all_caches(caches, result.media, url)
+
+    if result.status != Status.INTERMEDIATE:
+        # Intermediates are progress frames, not answers. Caching one would
+        # let a placeholder replace a final result.
+        put_all_caches(caches, result.url, result.media)
     return result
-
-
-def _media_from_caches(url: str, caches: Sequence[Cache]) -> Media | None:
-    """Return cached Media for *url*, or ``None``."""
-    url = canonical_url(url)
-    for cache in caches:
-        media = cache.get(url)
-        if media is not None:
-            return media
-    return None
 
 
 def _placeholder_thumb(server_key: str, placeholder: str, b64: str) -> EncodedJpeg:
@@ -458,28 +457,17 @@ def _preflight_urls(
             done[url] = Result.client_fail(url, "invalid URL")
             continue
 
-        # Check all caches for a fresh entry.
-        cache_url = canonical_url(url)
-        fresh = False
-        for cache in caches:
-            media = cache.get(cache_url)
-            if media is not None and media.is_fresh():
-                data = {"url": url, "status": Status.SUCCESS, "source": Source.CLIENT}
-                done[url] = Result(data, media=media)
-                fresh = True
-                break
-
-        if fresh:
+        media = media_from_caches(caches, url)
+        if media is not None and media.is_fresh():
+            data = {"url": url, "status": Status.SUCCESS, "source": Source.CLIENT}
+            done[url] = Result(data, media=media)
             continue
 
-        # Stale, build the server request.  Include the cache token
-        # from any cached media so the server can do a conditional revalidation.
+        # Stale, build the server request. Include the cache token from any
+        # cached media so the server can do a conditional revalidation.
         item: dict[str, str] = {"url": url}
-        for cache in caches:
-            media = cache.get(cache_url)
-            if media is not None and media.cache:
-                item["cache"] = media.cache
-                break
+        if media is not None and media.cache:
+            item["cache"] = media.cache
         stale.append(item)
 
     return done, stale

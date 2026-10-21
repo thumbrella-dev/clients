@@ -38,4 +38,9 @@ impl Client {
     pub fn base_url(&self) -> &str {
         self.inner.base_url()
     }
+
+    /// The full effective connection string, including tokens or custom headers.
+    pub fn connect(&self) -> &str {
+        self.inner.connect()
+    }
 }

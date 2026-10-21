@@ -4,52 +4,28 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
-from copy import copy
 from typing import TYPE_CHECKING, Sequence
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit
 
 if TYPE_CHECKING:
     from .result import Media
 
 
-_AUTH_PARAMS = {
-    "auth", "authorization", "token", "access_token", "auth_token",
-    "api_key", "apikey", "signature", "sig", "credential", "security_token",
-    "expires", "expiry", "awsaccesskeyid", "googleaccessid", "policy", "key-pair-id",
-}
-_SAS_PARAMS = {
-    "sv", "ss", "srt", "sp", "se", "st", "spr", "sip", "sr", "si",
-    "skoid", "sktid", "skt", "ske", "sks", "skv", "saoid", "suoid", "scid",
-}
+def _cache_key(url: str) -> str:
+    """Return the canonical cache key for *url*.
 
-
-def canonical_url(raw: str) -> str:
-    """HTTP cache key without fragments or signing parameters; never a request URL."""
-    if raw.partition("://")[0].lower() not in ("http", "https") or "://" not in raw:
-        return raw
+    HTTP(S) URLs drop the query and fragment and lowercase the scheme and
+    host, so signed variants of one object share an entry. Other values are
+    returned unchanged.
+    """
     try:
-        parts = urlsplit(raw)
-        host = parts.hostname
-        port = parts.port
+        parts = urlsplit(url)
     except ValueError:
-        return raw
-    if not host:
-        return raw
-    if ":" in host:
-        host = f"[{host}]"
-    if port is not None and port != (443 if parts.scheme == "https" else 80):
-        host += f":{port}"
-    userinfo, separator, _ = parts.netloc.rpartition("@")
-    authority = f"{userinfo}{separator}{host}"
-    pairs = parse_qsl(parts.query, keep_blank_values=True)
-    sas = any(key.lower() == "sig" for key, _ in pairs)
-    query = urlencode([
-        (key, value) for key, value in pairs
-        if key.lower() not in _AUTH_PARAMS
-        and not key.lower().startswith(("x-amz-", "x-goog-"))
-        and not (sas and key.lower() in _SAS_PARAMS)
-    ])
-    return urlunsplit((parts.scheme, authority, parts.path or "/", query, ""))
+        return url
+    scheme = parts.scheme.lower()
+    if scheme not in ("http", "https"):
+        return url
+    return urlunsplit((scheme, parts.netloc.lower(), parts.path, "", ""))
 
 
 class Cache(ABC):
@@ -63,6 +39,11 @@ class Cache(ABC):
     statistics tracking (`hits` and `misses`)
 
     A cache can be used with multiple clients at the same time.
+
+    Keys are opaque strings. :func:`media_from_caches`, :func:`put_all_caches`
+    and :func:`remove_from_caches` canonicalise a raw URL once for the whole
+    stack, so implementations store the key they are given and never
+    normalise it themselves.
     """
 
     def __eq__(self, other: object) -> bool:
@@ -75,20 +56,20 @@ class Cache(ABC):
         return object.__hash__(self)
 
     @abstractmethod
-    def get(self, url: str) -> "Media | None":
-        """Get the possible cached media for an url."""
+    def get(self, key: str) -> "Media | None":
+        """Get media stored under *key*."""
 
     @abstractmethod
-    def put(self, media: "Media") -> None:
-        """Store cached media for an url."""
+    def put(self, key: str, media: "Media") -> None:
+        """Store *media* under *key*."""
 
     @abstractmethod
-    def remove(self, url: str) -> None:
-        """Remove possible cached media for an url."""
+    def remove(self, key: str) -> None:
+        """Remove the entry stored under *key*."""
 
     @abstractmethod
     def reset(self) -> None:
-        """Clear all cached urls and reset statistics."""
+        """Clear all entries and reset statistics."""
 
     @abstractmethod
     def __len__(self) -> int:
@@ -143,10 +124,9 @@ class MemoryCache(Cache):
             f"hits={self._hits}/{self._hits + self._misses}>"
         )
 
-    def get(self, url: str) -> "Media | None":
-        url = canonical_url(url)
+    def get(self, key: str) -> "Media | None":
         try:
-            media = self._store[url]
+            media = self._store[key]
         except KeyError:
             self._misses += 1
             return None
@@ -154,30 +134,26 @@ class MemoryCache(Cache):
         self._hits += 1
 
         # Move to front (most-recently-used).
-        self._order.remove(url)
-        self._order.insert(0, url)
+        self._order.remove(key)
+        self._order.insert(0, key)
         return media
 
-    def put(self, media: "Media") -> None:
-        self._put(canonical_url(media.url), media)
-
-    def _put(self, url: str, media: "Media") -> None:
-        if not url:
+    def put(self, key: str, media: "Media") -> None:
+        if not key:
             return
-        if url in self._store:
-            self._order.remove(url)
+        if key in self._store:
+            self._order.remove(key)
         elif len(self._store) >= self._max_items:
             stale = self._order.pop()
             del self._store[stale]
 
-        self._store[url] = media
-        self._order.insert(0, url)
+        self._store[key] = media
+        self._order.insert(0, key)
 
-    def remove(self, url: str) -> None:
-        url = canonical_url(url)
+    def remove(self, key: str) -> None:
         try:
-            del self._store[url]
-            self._order.remove(url)
+            del self._store[key]
+            self._order.remove(key)
         except (KeyError, ValueError):
             pass
 
@@ -223,18 +199,43 @@ def is_cache_fresh(cache_value: str) -> bool:
 
 
 # internal
+def media_from_caches(caches: Sequence[Cache], url: str) -> "Media | None":
+    """Get cached media for a raw URL from a stack of caches.
+
+    The URL is canonicalised once, so every cache in the stack sees the same
+    key. A fresh entry wins over a stale one; otherwise the first entry found
+    is returned so its ``cache`` token can be used for revalidation.
+    """
+    key = _cache_key(url)
+    stale: "Media | None" = None
+    for cache in caches:
+        media = cache.get(key)
+        if media is None:
+            continue
+        if media.is_fresh():
+            return media
+        if stale is None:
+            stale = media
+    return stale
+
+
+# internal
 def put_all_caches(
-    caches: Sequence[Cache], media: Media | None, url: str | None = None,
+    caches: Sequence[Cache],
+    url: str,
+    media: "Media | None",
 ) -> None:
-    """Store media in all registered caches."""
-    if media is not None:
-        key = canonical_url(media.url if url is None else url)
-        cached = media
-        if media.url != key:
-            cached = copy(media)
-            cached.url = key
-        for cache in caches:
-            if isinstance(cache, MemoryCache):
-                cache._put(key, media)
-            else:
-                cache.put(cached)
+    """Store media in every cache under the raw URL's canonical key."""
+    if media is None:
+        return
+    key = _cache_key(url)
+    for cache in caches:
+        cache.put(key, media)
+
+
+# internal
+def remove_from_caches(caches: Sequence[Cache], url: str) -> None:
+    """Remove a raw URL from every cache in a stack."""
+    key = _cache_key(url)
+    for cache in caches:
+        cache.remove(key)

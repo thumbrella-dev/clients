@@ -2,11 +2,15 @@
 
 ## Development 
 
+- BatchedClient handles multiple concurrent batches  /typescript
 - Browser tbrSetup properly registers caches  /typescript
 - Use cleaned urls for cache lookups  /typescript /python /rust
+- Add Client connect attribute  /typescript /python /rust
 
-## 1.5.0 - 
 
+## 2.0.0 - 2026/10/11
+
+- Add Result.pin url  /typescript /python /rust
 - Update typescript to 7  /typescript
 - Attestation for bundled js  /typescript
 - Fix intermediate stream tracking  /typescript

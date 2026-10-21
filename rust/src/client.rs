@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use crate::cache::{Cache, MemoryCache, canonical_url};
+use crate::cache::{Cache, MemoryCache, media_from_caches, put_all_caches};
 use crate::types::*;
 
 const DEFAULT_BASE: &str = "https://cloud.thumbrella.dev";
@@ -66,6 +66,7 @@ enum ConnectSource {
 
 struct ConnectConfig {
     base_url: String,
+    connect: String,
     host: String,
     headers: HashMap<String, String>,
     source: ConnectSource,
@@ -83,12 +84,22 @@ fn host_from_url(url: &str) -> &str {
 
 fn parse_connect(connect: Option<&str>) -> ConnectConfig {
     let (raw, source) = match connect {
-        Some(s) if !s.is_empty() => (s.to_string(), ConnectSource::Argument),
+        Some(s) => (s.to_string(), ConnectSource::Argument),
         _ => match std::env::var("TBR_CONNECT") {
             Ok(env) if !env.is_empty() => (env, ConnectSource::Env),
             _ => (DEFAULT_BASE.to_string(), ConnectSource::Default),
         },
     };
+
+    if raw.trim().is_empty() {
+        return ConnectConfig {
+            base_url: String::new(),
+            connect: raw,
+            host: String::new(),
+            headers: HashMap::new(),
+            source,
+        };
+    }
 
     // Bare value, no scheme.  Only auth tokens are valid without a URL.
     if !raw.contains("://") {
@@ -97,6 +108,7 @@ fn parse_connect(connect: Option<&str>) -> ConnectConfig {
             headers.insert("Authorization".into(), format!("Bearer {raw}"));
             return ConnectConfig {
                 base_url: DEFAULT_BASE.into(),
+                connect: raw,
                 host: host_from_url(DEFAULT_BASE).to_string(),
                 headers,
                 source,
@@ -105,6 +117,7 @@ fn parse_connect(connect: Option<&str>) -> ConnectConfig {
         // Bare non-auth values are not valid connect strings.
         return ConnectConfig {
             base_url: DEFAULT_BASE.into(),
+            connect: raw,
             host: host_from_url(DEFAULT_BASE).to_string(),
             headers: HashMap::new(),
             source,
@@ -130,6 +143,7 @@ fn parse_connect(connect: Option<&str>) -> ConnectConfig {
 
     ConnectConfig {
         base_url,
+        connect: raw,
         host,
         headers,
         source,
@@ -171,6 +185,7 @@ fn parse_connect(connect: Option<&str>) -> ConnectConfig {
 /// ```
 pub struct Client {
     base_url: String,
+    connect: String,
     host: String,
     http: HttpClient,
     stream_http: HttpClient,
@@ -213,6 +228,7 @@ impl Client {
 
         Self {
             base_url: cfg.base_url,
+            connect: cfg.connect,
             host: cfg.host,
             http: HttpClient::builder()
                 .default_headers(default_headers.clone())
@@ -252,6 +268,11 @@ impl Client {
         &self.base_url
     }
 
+    /// The full effective connection string, including tokens or custom headers.
+    pub fn connect(&self) -> &str {
+        &self.connect
+    }
+
     //  public API
 
     /// Check configuration and server connectivity.
@@ -261,7 +282,11 @@ impl Client {
     /// those will also be validated.
     ///
     /// Returns `Ok(())` on success.
+    /// An empty or whitespace-only connect string fails without a request.
     pub async fn verify(&self) -> Result<(), Error> {
+        if self.connect.trim().is_empty() {
+            return Err(Error::Verify("Connection string is empty".into()));
+        }
         let resp = self
             .request("GET", "/health")
             .send()
@@ -393,7 +418,9 @@ impl Client {
 
             for mut item in batch.items {
                 item.resolve_pin(&request_url).map_err(|e| Error::Http(code, e))?;
-                self.cache_media(&item.url, &item.media);
+                if item.status != status::INTERMEDIATE {
+                    put_all_caches(&self.caches, &item.url, &item.media);
+                }
                 done.insert(item.url.clone(), item);
             }
         }
@@ -576,33 +603,23 @@ impl Client {
             }
 
             // Check caches for a fresh entry.
-            let cache_url = canonical_url(url);
-            let mut fresh = false;
-            for cache in &self.caches {
-                if let Some(cached) = cache.get(&cache_url)
-                    && cached.is_fresh()
-                {
-                    let mut r = ResultData::new(url.to_string());
-                    r.status = status::SUCCESS.to_string();
-                    r.source = Some(source::CACHE.to_string());
-                    r.media = cached.clone();
-                    done.insert(url.to_string(), r);
-                    fresh = true;
-                    break;
-                }
-            }
-            if fresh {
+            let media = media_from_caches(&self.caches, url);
+            if let Some(cached) = &media
+                && cached.is_fresh()
+            {
+                let mut r = ResultData::new(url.to_string());
+                r.status = status::SUCCESS.to_string();
+                r.source = Some(source::CACHE.to_string());
+                r.media = cached.clone();
+                done.insert(url.to_string(), r);
                 continue;
             }
 
             let mut item = serde_json::json!({ "url": url });
-            for cache in &self.caches {
-                if let Some(cached) = cache.get(&cache_url)
-                    && !cached.cache.is_empty()
-                {
-                    item["cache"] = serde_json::Value::String(cached.cache.clone());
-                    break;
-                }
+            if let Some(cached) = &media
+                && !cached.cache.is_empty()
+            {
+                item["cache"] = serde_json::Value::String(cached.cache.clone());
             }
             stale_items.push(item);
         }
@@ -612,8 +629,9 @@ impl Client {
 
     /// Finalize a single result parsed from an NDJSON stream line.
     ///
-    /// Drops intermediate results out of `pending` tracking, stores any media
-    /// in the attached caches, and returns the result to yield.
+    /// Terminal results are stored in the attached caches and dropped out of
+    /// `pending` tracking. Intermediate frames are not cached; they are
+    /// progress updates, not answers.
     fn finish_stream_result(
         &self,
         mut result: ResultData,
@@ -630,20 +648,10 @@ impl Client {
             return Some(result);
         }
         if result.status != status::INTERMEDIATE {
+            put_all_caches(&self.caches, &result.url, &result.media);
             pending.remove(&result.url);
         }
-        self.cache_media(&result.url, &result.media);
         Some(result)
-    }
-
-    fn cache_media(&self, url: &str, media: &Media) {
-        let media = Media {
-            url: canonical_url(url),
-            ..media.clone()
-        };
-        for cache in &self.caches {
-            cache.put(&media);
-        }
     }
 
     fn build_request(&self, client: &HttpClient, method: &str, path: &str) -> reqwest::RequestBuilder {
@@ -668,56 +676,21 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[tokio::test]
-    async fn canonical_cache_keys_preserve_result_and_request_urls() {
-        let client = Client::new(Some("https://server.test"));
-        let first = "https://media.test/a?v=2&token=one#part";
-        let second = "https://media.test/a?v=2&token=two";
-        let different = "https://media.test/a?v=3&token=three";
-        let expiry = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() + 3600;
-        let mut media = Media {
-            // The server currently strips all query parameters from media URLs.
-            url: "https://media.test/a".into(),
-            cache: format!("{expiry:x}:test"),
-            thumbnail: vec![1, 2, 3].into(),
-            ..Media::default()
-        };
-        client.cache_media(first, &media);
-        assert_eq!(media.url, "https://media.test/a");
-        let stored = client.caches()[0].get("https://media.test/a?v=2").unwrap();
-        assert_eq!(stored.url, "https://media.test/a?v=2");
+    #[test]
+    fn intermediate_results_do_not_seed_the_cache() {
+        let client = Client::with_caches(None, vec![Box::new(MemoryCache::default())]);
+        let request_url = reqwest::Url::parse("https://server.test/batch").unwrap();
+        let mut pending = HashSet::new();
 
-        let results = client.batch(&[second]).await.unwrap();
-        assert_eq!(results[0].url, second);
-        assert_eq!(results[0].source.as_deref(), Some(source::CACHE));
-        assert_eq!(results[0].media.thumbnail.bytes(), &[1, 2, 3]);
-        let urls = [second];
-        let streamed: Vec<_> = client.stream(&urls).collect().await;
-        assert_eq!(streamed[0].url, second);
-        assert_eq!(streamed[0].source.as_deref(), Some(source::CACHE));
+        let mut intermediate = ResultData::new("https://media.test/pic.svg".to_string());
+        intermediate.status = status::INTERMEDIATE.to_string();
+        client.finish_stream_result(intermediate, &mut pending, &request_url);
+        assert_eq!(client.caches()[0].len(), 0);
 
-        let (_, stale) = client.preflight(&[different]);
-        assert_eq!(stale, vec![serde_json::json!({"url": different})]);
-        client.reset_caches();
-        media.cache = "1:stale".into();
-        let mut result = ResultData::new(first.into());
-        result.status = status::SUCCESS.into();
-        result.media = media;
-        let mut pending = HashSet::from([first.to_string()]);
-        let result = client
-            .finish_stream_result(
-                result,
-                &mut pending,
-                &reqwest::Url::parse("https://server.test/batch").unwrap(),
-            )
-            .unwrap();
-        assert_eq!(result.url, first);
-        assert_eq!(result.media.url, "https://media.test/a");
-        assert!(pending.is_empty());
-        let (done, stale) = client.preflight(&[second]);
-        assert!(done.is_empty());
-        assert_eq!(stale, vec![serde_json::json!({"url": second, "cache": "1:stale"})]);
+        let mut final_result = ResultData::new("https://media.test/pic.svg".to_string());
+        final_result.status = status::SUCCESS.to_string();
+        client.finish_stream_result(final_result, &mut pending, &request_url);
+        assert_eq!(client.caches()[0].len(), 1);
     }
 }
