@@ -53,22 +53,23 @@ For a static web page, import directly from the CDN and avoid the
 npm operations with
 `import { tbrSetup } from "https://js.thumbrella.dev/2.0/tbr.js";`
 
-The `tbrSetup` call registers `<tbr-thumb>` and configures its loading states,
-placeholders, caching, and lazy loading.
+The `tbrSetup` call registers `<tbr-thumb>`, creates the page-wide client and
+cache stack, and enables shared batching. Every element uses that single global
+client; call `tbrSetup` again to change the connect string or cache stack.
 
 ## Quickstart - Node and server
 
 ```ts
 import { Client } from "@thumbrella/client";
 
-// Defaults to $TBR_CONNECT of no `Client` argument provided
-const tbr = await new Client("http://localhost:3114")
+// Defaults to $TBR_CONNECT if no `Client` argument is provided
+const tbr = await new Client("http://localhost:3114");
 
 // Fetch a single thumbnail
 const result = await tbr.thumb("https://demo.thumbrella.dev/media/pocket-game.webp");
 console.log(result.status, result.media?.thumbnail.length ?? 0, "bytes");
 
-// Stream results of thumbnail batch
+// Stream results for a batch of thumbnails
 const mediaUrls = [
   "https://demo.thumbrella.dev/media/padres-stereo.exr",
   "https://demo.thumbrella.dev/media/golden-gate.exr",
@@ -133,10 +134,19 @@ jpeg.key           // number - content hash, useful for deduplication
 ## Persistent Cache
 
 `new Client({ caches })` accepts a `MemoryCache` or any `CacheBackend`
-(`createMemoryCache`, `createBrowserCache`). `enablePersistentCache()` or
-`tbrSetup({ persist: 10 })` adds IndexedDB persistence on top of the default
-memory cache. Byte backends store serialized `Media` records, so thumbnails
-and their metadata survive reloads.
+(`createMemoryCache`, `createBrowserCache`). In the browser, all
+`<tbr-thumb>` elements share one global cache stack owned by `tbrSetup`:
+
+```ts
+import { createBrowserCache, tbrSetup } from "@thumbrella/client/browser";
+
+tbrSetup({ persist: 10 });                    // add 10 MB of IndexedDB
+tbrSetup({ caches: [createBrowserCache()] }); // replace the stack
+```
+
+Byte backends store serialized `Media` records, so thumbnails and their
+metadata survive reloads. Calling `tbrSetup` again with a different connect
+string creates a new global client but keeps the same cache objects.
 
 ## Module Structure
 

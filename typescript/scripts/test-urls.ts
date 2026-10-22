@@ -12,7 +12,6 @@
 import assert from "node:assert/strict";
 import {
   Client,
-  BatchedClient,
   MemoryCache,
   Media,
   Result,
@@ -152,89 +151,6 @@ async function testRevalidation(): Promise<void> {
   assert.equal(seen.at(-1)?.cache, "1:tok", "the cache token is offered for revalidation");
   assert.equal(revalidated.status, Status.SUCCESS);
   assert.equal(revalidated.url, requested, "revalidation reports the requested URL");
-}
-
-async function testFanOut(): Promise<void> {
-  const url = "https://media.test/one.jpg?X-Amz-Signature=xyz";
-  globalThis.fetch = mockStream(() => [
-    { url, status: Status.INTERMEDIATE, media: { url } },
-    { url, status: Status.SUCCESS, media: { url } },
-  ]);
-
-  const client = new Client({ connect: "https://server.test/api", caches: [] });
-  const batched = new BatchedClient(client);
-
-  const collect = async (): Promise<string[]> => {
-    const seen: string[] = [];
-    for await (const r of batched.streamUrl(url)) seen.push(r.status);
-    return seen;
-  };
-
-  const [first, second] = await Promise.all([collect(), collect()]);
-  assert.deepEqual(first, [Status.INTERMEDIATE, Status.SUCCESS]);
-  assert.deepEqual(second, first, "both subscribers receive the whole stream");
-}
-
-async function testLateSubscriberGetsIntermediate(): Promise<void> {
-  const url = "https://media.test/slow.jpg";
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => { release = resolve; });
-  const fake = {
-    async *stream() {
-      yield new Result({
-        url,
-        status: Status.INTERMEDIATE,
-        media: { url, thumbnail: "QUJD", placeholder: "image" },
-      });
-      await gate;
-      yield new Result({
-        url,
-        status: Status.SUCCESS,
-        media: { url, thumbnail: "REVGRw==" },
-      });
-    },
-  } as unknown as Client;
-  const batched = new BatchedClient(fake);
-
-  const first = batched.streamUrl(url);
-  const firstIntermediate = await first.next();
-  assert.equal(firstIntermediate.value?.status, Status.INTERMEDIATE);
-
-  const second = batched.streamUrl(url);
-  const replayed = await second.next();
-  assert.equal(replayed.value?.status, Status.INTERMEDIATE);
-  assert.deepEqual(
-    replayed.value?.media?.thumbnail.bytes,
-    new Uint8Array([65, 66, 67]),
-    "a late subscriber receives the latest in-flight placeholder",
-  );
-
-  release();
-  const firstFinal = await first.next();
-  const secondFinal = await second.next();
-  assert.equal(firstFinal.value?.status, Status.SUCCESS);
-  assert.equal(secondFinal.value?.status, Status.SUCCESS);
-  assert.deepEqual(
-    secondFinal.value?.media?.thumbnail.bytes,
-    new Uint8Array([68, 69, 70, 71]),
-    "the final result reaches every subscriber",
-  );
-  assert.equal((await second.next()).done, true);
-}
-
-async function testClientKeying(): Promise<void> {
-  const { getClient } = await import("../src/batched.js");
-  const a = getClient("http://a.test");
-  const b = getClient("http://b.test");
-  assert.notEqual(a, b, "each connect string gets its own client");
-  assert.equal(getClient("http://a.test"), a, "the same connect string is shared");
-  assert.equal(a.baseUrl, "http://a.test");
-  assert.equal(b.baseUrl, "http://b.test");
-  assert.equal(
-    a.cachesList[0],
-    b.cachesList[0],
-    "switching connect strings keeps the same cache",
-  );
 }
 
 async function testFailuresAreNotCachedFresh(): Promise<void> {
@@ -383,14 +299,11 @@ async function main(): Promise<void> {
     await testDistinctVariants();
     await testRevalidation();
     await testCanonicalCacheKeys();
-    await testFanOut();
-    await testLateSubscriberGetsIntermediate();
-    await testClientKeying();
     await testFailuresAreNotCachedFresh();
     await testIntermediateDoesNotWinCache();
     await testStreamWithoutDeadline();
     await testStreamCacheFailure();
-    console.log("URL identity, revalidation and batch fan-out passed");
+    console.log("URL identity, revalidation and streaming passed");
   } finally {
     globalThis.fetch = originalFetch;
   }

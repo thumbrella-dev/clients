@@ -1,12 +1,10 @@
 /**
- * element.ts — DEPRECATED entry point.
+ * element.ts — compatibility re-export.
  *
- * The `<tbr-thumb>` custom element has been merged into `browser.ts`.
- * This module now just re-exports the browser entry so existing imports of
- * `@thumbrella/client/element` (and `./element.js`) keep working during the
- * transition.
+ * The `<tbr-thumb>` custom element lives in `browser.ts`.  This module remains
+ * for source-level imports of `./element.js`; it is not a published package
+ * entry point (see the `exports` map in package.json).
  *
- * @deprecated Import from `@thumbrella/client/browser` (or `./browser.js`)
- * instead.  The `element` entry will be removed in a future release.
+ * @deprecated Import from `./browser.js` instead.
  */
 export * from "./browser.js";

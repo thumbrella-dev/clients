@@ -2,12 +2,11 @@
 
 ## Development 
 
-- BatchedClient handles multiple concurrent batches  /typescript
-- Browser tbrSetup properly registers caches  /typescript
-- Use cleaned urls for cache lookups  /typescript /python /rust
-- Add Client connect attribute  /typescript /python /rust
-- Fix shared batched client selection after connection changes  /typescript
-- Preserve terminal results on cache errors; streaming has no client-imposed timeout  /typescript
+- Remove semi-internal BatchedClient  /typescript
+- `tbrSetup` can be re invoked to modify the global config  /typescript
+- `tbrSetup` properly registers browser side caches  /typescript
+- Simplify urls for cache lookups  /typescript /python /rust
+- Add Client.connect attribute  /typescript /python /rust
 
 
 ## 2.0.0 - 2026/10/11

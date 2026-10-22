@@ -22,8 +22,3 @@ http/
 package-lock.json
 uv.lock
 Cargo.lock
-
-
-# es bundled build artifacts
-typescript/element.js
-typescript/browser.js

@@ -68,8 +68,8 @@ interface LruEntry {
  * Create an in-memory LRU cache for raw thumbnail bytes.
  *
  * A small, dependency-free LRU with TTL eviction.  The returned object
- * satisfies {@link CacheBackend} and can be passed directly to the DOM
- * coordinator, the web component, or a custom setup.
+ * satisfies {@link CacheBackend} and can be passed to a client or added to the
+ * browser setup's global cache stack.
  *
  * Defaults: 500 entries, 5-minute TTL.
  */

@@ -16,14 +16,8 @@ import {
   putAllCaches,
   removeFromCaches,
 } from "../src/index.js";
-import {
-  configure,
-  createBrowserCache,
-  enablePersistentCache,
-  getBatchedClient,
-  getClient,
-  tbrSetup,
-} from "../src/browser.js";
+import * as browser from "../src/browser.js";
+import { createBrowserCache, tbrSetup } from "../src/browser.js";
 
 const freshToken = `${(Math.floor(Date.now() / 1000) + 3600).toString(16)}:test`;
 const staleToken = "1:test";
@@ -195,10 +189,6 @@ async function testConnectConfiguration(): Promise<void> {
     }
     assert.equal(requests, 1, "empty configuration never makes a request");
     delete process.env.TBR_CONNECT;
-    const defaultClient = getClient();
-    const emptyClient = getClient("");
-    assert.notEqual(emptyClient, defaultClient);
-    await assert.rejects(emptyClient.verify(), VerifyError);
     assert.equal(new Client().connect, "https://cloud.thumbrella.dev");
     assert.equal(requests, 1);
   } finally {
@@ -269,43 +259,52 @@ async function testBrowserWiring(): Promise<void> {
   });
 
   try {
-    const defaultClient = getClient("https://default.test");
-    assert.ok(defaultClient.cachesList[0] instanceof MemoryCache);
-
-    const replacement = createMemoryCache();
-    configure({ caches: [replacement] });
-    const client = getClient("https://setup.test");
-    assert.deepEqual(client.cachesList, [replacement]);
+    // The old per-connect helpers are gone; tbrSetup is the only entry point.
+    const exported = browser as unknown as Record<string, unknown>;
+    for (const name of [
+      "configure", "enablePersistentCache", "getClient",
+      "getBatchedClient", "BatchedClient", "resolveConnect",
+    ]) {
+      assert.equal(exported[name], undefined, `${name} must not be exported`);
+    }
 
     assert.throws(() => tbrSetup({ persist: -1 }), RangeError);
 
-    tbrSetup();
+    // First call: script defaults, one memory cache, one persistent cache,
+    // and one custom-element definition.
+    const client = tbrSetup();
+    assert.equal(client.connect, "https://persist.test");
     assert.equal(definitions, 1);
-    tbrSetup();
+    assert.equal(client.cachesList.length, 2);
+    assert.ok(client.cachesList[0] instanceof MemoryCache);
+    const persistent = client.cachesList[1];
+
+    // Repeated calls keep the same global client and do not redefine.
+    assert.equal(tbrSetup(), client);
+    assert.equal(tbrSetup({}), client);
     assert.equal(definitions, 1);
 
-    const configured = getClient("https://persist.test");
-    const batched = getBatchedClient();
-    assert.equal(batched.client, configured);
-    assert.equal(getBatchedClient(configured.connect), batched);
+    // Replacing caches updates the current client in place.
+    const replacement = createMemoryCache();
+    assert.equal(tbrSetup({ caches: [replacement] }), client);
+    assert.deepEqual(client.cachesList, [replacement]);
+
+    // Changing the server creates a new client but reuses the cache objects.
     const other = tbrSetup("https://other.test");
-    assert.equal(getBatchedClient().client, other);
-    assert.notEqual(getBatchedClient(), batched);
-    tbrSetup(configured.connect);
-    assert.equal(getBatchedClient(), batched);
-    assert.equal(configured.cachesList.length, 2);
-    assert.equal(getClient("https://other.test").cachesList.length, 2);
-    assert.notEqual(configured, getClient("https://other.test"));
+    assert.notEqual(other, client);
+    assert.equal(other.connect, "https://other.test");
+    assert.equal(other.cachesList[0], replacement);
+    assert.equal(tbrSetup(), other);
+
+    // Persistence can be added later; it is appended to the current stack.
+    const persisted = tbrSetup({ persist: 2 });
+    assert.equal(persisted, other);
+    assert.deepEqual(persisted.cachesList, [replacement, persistent]);
+
+    // An explicit empty connect string is honoured.
     const empty = tbrSetup("");
     assert.equal(empty.connect, "");
-    assert.equal(getBatchedClient().client, empty);
-    assert.equal(getBatchedClient(""), getBatchedClient());
-    assert.notEqual(getBatchedClient(), batched);
     await assert.rejects(empty.verify(), VerifyError);
-
-    const persistent = enablePersistentCache();
-    assert.equal(configured.cachesList.length, 2);
-    assert.ok(configured.cachesList.includes(persistent));
   } finally {
     globals.forEach((key, index) => {
       const descriptor = descriptors[index];
