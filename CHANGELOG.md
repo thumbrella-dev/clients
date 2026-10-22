@@ -1,13 +1,11 @@
-# Thumbrella Clients 1.x changelog
+# Thumbrella clients changelog
 
 ## Development 
 
-- Remove semi-internal BatchedClient  /typescript
-- `tbrSetup` can be re invoked to modify the global config  /typescript
+- Remove semi-internal browser `BatchedClient`  /typescript
 - `tbrSetup` properly registers browser side caches  /typescript
 - Simplify urls for cache lookups  /typescript /python /rust
 - Add Client.connect attribute  /typescript /python /rust
-
 
 ## 2.0.0 - 2026/10/11
 
