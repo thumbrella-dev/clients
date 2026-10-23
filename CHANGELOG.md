@@ -2,6 +2,8 @@
 
 ## Development 
 
+- Browser `tbr-thumb` seeds fresh cached thumbnails instantly, without the fade-in  /typescript
+- Browser `tbr-thumb` shows stale cached thumbnails immediately as intermediate images  /typescript
 - Remove semi-internal browser `BatchedClient`  /typescript
 - `tbrSetup` properly registers browser side caches  /typescript
 - Simplify urls for cache lookups  /typescript /python /rust

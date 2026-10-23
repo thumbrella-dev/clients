@@ -8,8 +8,9 @@
 
 import assert from "node:assert/strict";
 import type { Client } from "../src/api.js";
+import { MemoryCache } from "../src/cache.js";
 import { BATCH_LIMIT, ThumbnailManager } from "../src/manager.js";
-import { Result, Status } from "../src/types.js";
+import { Media, Result, Source, Status } from "../src/types.js";
 
 interface Target {
   results: Result[];
@@ -224,9 +225,88 @@ async function testStreamFailure(): Promise<void> {
   assert.match(result?.message ?? "", /connection refused/);
 }
 
+async function testStaleCachePrimesIntermediate(): Promise<void> {
+  const url = "https://media.test/stale";
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+
+  const cache = new MemoryCache();
+  cache.put(
+    url,
+    new Media({ url, thumbnail: "U1RBTEU=", cache: "1:AAAA" }),
+  );
+
+  const manager = new ThumbnailManager();
+  manager.setClient({
+    cachesList: [cache],
+    async *stream() {
+      yield new Result({
+        url,
+        status: Status.INTERMEDIATE,
+        media: { url, thumbnail: "UExBQ0U=", placeholder: "image" },
+      });
+      await gate;
+      yield new Result({ url, status: Status.SUCCESS, media: { url, thumbnail: "RklOQUw=" } });
+    },
+  } as unknown as Client);
+
+  const t = target();
+  manager.request(url, t);
+  await waitFor(() => t.results.length >= 2);
+
+  assert.equal(t.results[0]!.status, Status.INTERMEDIATE);
+  assert.equal(t.results[0]!.source, Source.CACHE);
+  assert.deepEqual(
+    t.results[0]!.media?.thumbnail.bytes,
+    new Uint8Array([83, 84, 65, 76, 69]),
+    "the stale cached image is pushed before the server speaks",
+  );
+
+  // A late subscriber replays the stale image, not the server placeholder.
+  const late = target();
+  manager.request(url, late);
+  assert.equal(late.results.length, 1);
+  assert.deepEqual(late.results[0]?.media?.thumbnail.bytes, new Uint8Array([83, 84, 65, 76, 69]));
+
+  release();
+  await Promise.all([t.finished, late.finished]);
+  assert.equal(t.results.at(-1)?.status, Status.SUCCESS);
+  assert.equal(late.results.at(-1)?.status, Status.SUCCESS);
+}
+
+async function testFreshCacheDoesNotPrime(): Promise<void> {
+  const url = "https://media.test/fresh";
+  const epoch = Math.floor(Date.now() / 1_000) + 60;
+  const cache = new MemoryCache();
+  cache.put(
+    url,
+    new Media({ url, thumbnail: "RlJFU0g=", cache: `${epoch.toString(16)}:AAAA` }),
+  );
+
+  const manager = new ThumbnailManager();
+  manager.setClient({
+    cachesList: [cache],
+    async *stream() {
+      yield new Result({ url, status: Status.SUCCESS, media: { url, thumbnail: "RklOQUw=" } });
+    },
+  } as unknown as Client);
+
+  const t = target();
+  manager.request(url, t);
+  await t.finished;
+
+  assert.deepEqual(
+    t.results.map((r) => r.status),
+    [Status.SUCCESS],
+    "a fresh cache entry gets no synthetic intermediate",
+  );
+}
+
 async function main(): Promise<void> {
   await testCoalescingAndDeduplication();
   await testIntermediateReplay();
+  await testStaleCachePrimesIntermediate();
+  await testFreshCacheDoesNotPrime();
   await testReleaseStopsUpdates();
   await testReleaseDropsQueuedRequest();
   await testBatchLimit();

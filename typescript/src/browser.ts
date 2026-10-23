@@ -17,10 +17,10 @@
  */
 
 import type { CacheBackend, ClientCache } from "./cache.js";
-import { MemoryCache } from "./cache.js";
+import { MemoryCache, mediaFromCaches } from "./cache.js";
 import { Client } from "./api.js";
 import { ThumbnailManager } from "./manager.js";
-import { Result, Media, Status } from "./types.js";
+import { Result, Media, Source, Status } from "./types.js";
 
 // Re-exports — everything you need in the browser from one import
 
@@ -454,6 +454,13 @@ styles?.replaceSync(`
     opacity: 0;
   }
 
+  /* A loaded element re-entering the in-flight state (stale cached image
+     shown while the server revalidates) keeps its image and shows the
+     spinner again. */
+  :host(.tbr-loaded.tbr-intermediate) .tbr-spinner {
+    opacity: 1;
+  }
+
   /* Keyframes */
 
   @keyframes tbr-shimmer {
@@ -510,6 +517,9 @@ export class TbrThumb extends _TbrBase {
   #pending = false;
   #rendered = false;
   #url: string | null = null;
+  /* True once an intermediate frame carrying a real image (not a server
+     placeholder) has been applied. */
+  #imageIntermediate = false;
 
   /* Reflect `src` as a property.  Without this, `el.src = u` on a custom
      element only creates an expando: `attributeChangedCallback` never runs,
@@ -570,6 +580,7 @@ export class TbrThumb extends _TbrBase {
   #reset(): void {
     this.#loaded = false;
     this.#pending = false;
+    this.#imageIntermediate = false;
     this.classList.remove(..._TBR_CLASSES);
   }
 
@@ -602,14 +613,48 @@ export class TbrThumb extends _TbrBase {
       return;
     }
 
+    void this.#seedFromCache(this.#url, manager);
+  }
+
+  /**
+   * Show a fresh cached thumbnail without any loading state or fade-in.
+   *
+   * A fresh entry means no server work and no visible transition: the image is
+   * painted as if it had always been there.  Stale entries take the normal
+   * request path (and are primed as an intermediate frame by the manager).
+   */
+  async #seedFromCache(url: string, manager: ThumbnailManager): Promise<void> {
+    const caches = _state.client?.cachesList;
+    if (caches && caches.length > 0) {
+      let media: Media | undefined;
+      try {
+        media = await mediaFromCaches(caches, url);
+      } catch {
+        media = undefined;
+      }
+      if (this.#url !== url || !this.isConnected) return;
+      if (media?.isFresh() && media.thumbnail.length > 0) {
+        const result = new Result({ url, status: Status.SUCCESS, source: Source.CACHE });
+        result.media = media;
+        this.#pending = false;
+        this.#applyResult(result, true);
+        return;
+      }
+    }
+
+    if (this.#url !== url || !this.isConnected || this.#loaded) return;
     this.classList.add("tbr-requested");
-    manager.request(this.#url, this);
+    manager.request(url, this);
   }
 
   #applyIntermediate(result: Result): void {
     const thumb = result.media?.thumbnail;
     if (!thumb) return;
     const isPlaceholder = !!result.media?.placeholder;
+    // A stale cached image shown as an intermediate is strictly better than a
+    // server placeholder, so placeholder frames must not replace it.
+    if (isPlaceholder && this.#imageIntermediate) return;
+    if (!isPlaceholder) this.#imageIntermediate = true;
     const blobUrl = isPlaceholder
       ? cachedBlobUrl(thumb.key, thumb.bytes)
       : URL.createObjectURL(new Blob([thumb.bytes as BlobPart], { type: "image/jpeg" }));
@@ -617,8 +662,8 @@ export class TbrThumb extends _TbrBase {
     this.classList.add("tbr-has-intermediate");
   }
 
-  #applyResult(result: Result): void {
-    this.classList.remove("tbr-requested");
+  #applyResult(result: Result, instant = false): void {
+    this.classList.remove("tbr-requested", "tbr-intermediate", "tbr-has-intermediate");
     this.classList.add("tbr-loaded", "tbr-" + result.status.toLowerCase());
     this.#loaded = true;
 
@@ -629,7 +674,20 @@ export class TbrThumb extends _TbrBase {
       const blobUrl = isPlaceholder
         ? cachedBlobUrl(key, bytes)
         : URL.createObjectURL(new Blob([bytes as BlobPart], { type: "image/jpeg" }));
-      this.#finalImg.src = blobUrl;
+      if (instant) {
+        // Skip the fade-in: a cache hit represents no work happening.
+        this.#finalImg.style.transition = "none";
+        this.#finalImg.src = blobUrl;
+        if (typeof requestAnimationFrame === "function") {
+          requestAnimationFrame(() => {
+            this.#finalImg.style.transition = "";
+          });
+        } else {
+          this.#finalImg.style.transition = "";
+        }
+      } else {
+        this.#finalImg.src = blobUrl;
+      }
     }
 
     this.dispatchEvent(

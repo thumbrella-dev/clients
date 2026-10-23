@@ -8,7 +8,8 @@
  */
 
 import type { Client } from "./api.js";
-import { Result, Status } from "./types.js";
+import { mediaFromCaches } from "./cache.js";
+import { Result, Source, Status } from "./types.js";
 
 /** A mounted element that can receive thumbnail updates. */
 export interface ThumbnailTarget {
@@ -114,6 +115,12 @@ export class ThumbnailManager {
   async #run(client: Client, batch: string[]): Promise<void> {
     const open = new Set(batch);
 
+    // Browser enhancement, kept out of the Client: if a URL already has a
+    // stale cached thumbnail, show it right away as an intermediate frame
+    // while the server revalidates or re-renders.  The request itself is
+    // unchanged.
+    await this.#primeStale(client, batch);
+
     // Release one slot per terminal result, so a slow URL does not hold up
     // the next batch for every other element on the page.
     const settle = (url: string, result?: Result): void => {
@@ -151,7 +158,13 @@ export class ThumbnailManager {
     const subscribers = this.#subscribers.get(url);
     if (!subscribers) return;
     if (result.status === Status.INTERMEDIATE) {
-      this.#intermediates.set(url, result);
+      // A placeholder frame must not replace an intermediate that already
+      // carries a real image (for example the stale cached thumbnail).
+      const existing = this.#intermediates.get(url);
+      const isPlaceholder = !!result.media?.placeholder;
+      if (!isPlaceholder || !existing || existing.media?.placeholder) {
+        this.#intermediates.set(url, result);
+      }
     }
     for (const target of [...subscribers]) target.update(result);
   }
@@ -159,5 +172,33 @@ export class ThumbnailManager {
   #complete(url: string): void {
     this.#subscribers.delete(url);
     this.#intermediates.delete(url);
+  }
+
+  /**
+   * Deliver a stale cached thumbnail as an intermediate frame for every URL
+   * that has one.  Fresh entries never reach this path (the client returns
+   * them directly), and entries without image bytes are skipped.
+   */
+  async #primeStale(client: Client, batch: string[]): Promise<void> {
+    const caches = client.cachesList;
+    if (!caches || caches.length === 0) return;
+
+    for (const url of batch) {
+      let media;
+      try {
+        media = await mediaFromCaches(caches, url);
+      } catch {
+        continue;
+      }
+      if (!media || media.isFresh() || media.thumbnail.length === 0) continue;
+
+      const result = new Result({
+        url,
+        status: Status.INTERMEDIATE,
+        source: Source.CACHE,
+      });
+      result.media = media;
+      this.#deliver(url, result);
+    }
   }
 }
