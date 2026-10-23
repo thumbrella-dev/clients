@@ -2,7 +2,7 @@
 
 ## Development 
 
-- Browser `tbr-thumb` tries to start with a best initial image  /typescript
+- Browser `tbr-thumb` starts with a best initial image  /typescript
 - Internal caches updated with server "not modified" results  /typescript
 - Remove semi-internal browser `BatchedClient`  /typescript
 - `tbrSetup` properly registers browser side caches  /typescript
