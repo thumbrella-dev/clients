@@ -57,6 +57,11 @@ The `tbrSetup` call registers `<tbr-thumb>`, creates the page-wide client and
 cache stack, and enables shared batching. Every element uses that single global
 client; call `tbrSetup` again to change the connect string or cache stack.
 
+The thumbnail will fade between various states. When first created the
+it will look for the best available representation as an immediate starting
+point. There will be a spinner overlayed while an actual remote request is
+running.
+
 ## Quickstart - Node and server
 
 ```ts
@@ -147,6 +152,11 @@ tbrSetup({ caches: [createBrowserCache()] }); // replace the stack
 Byte backends store serialized `Media` records, so thumbnails and their
 metadata survive reloads. Calling `tbrSetup` again with a different connect
 string creates a new global client but keeps the same cache objects.
+
+On a `not_modified` result, cached thumbnail bytes and metadata are retained,
+but a server-provided `media.cache` renews the stored freshness token. An
+omitted token leaves the old value unchanged; an explicitly empty token
+removes the entry from caches that support removal.
 
 ## Module Structure
 

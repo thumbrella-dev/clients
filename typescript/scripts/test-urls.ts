@@ -20,7 +20,9 @@ import {
   mediaFromCaches,
   putAllCaches,
   removeFromCaches,
+  createMemoryCache,
 } from "../src/index.js";
+import type { ClientCache } from "../src/index.js";
 
 type Item = { url: string };
 
@@ -269,6 +271,123 @@ async function testStreamWithoutDeadline(): Promise<void> {
   assert.equal(result.status, Status.SUCCESS, "malformed lines do not prevent a valid result");
 }
 
+function revalidationCaches(): ClientCache[][] {
+  return [
+    [new MemoryCache()],
+    [createMemoryCache()],
+    [new MemoryCache(), createMemoryCache()],
+  ];
+}
+
+function cachedMedia(url: string): Media {
+  return new Media({
+    url: url.split("?")[0],
+    cache: "1:old",
+    thumbnail: "QUJD",
+    placeholder: "vector",
+    mime: "image/svg+xml",
+    kind: "image",
+    extension: "svg",
+    file_size: 1234,
+    properties: { width: 640, height: 480 },
+  });
+}
+
+async function testNotModifiedRenewsOnlyCacheToken(): Promise<void> {
+  const url = "https://media.test/renew.svg?signature=first";
+  const renewed = `${(Math.floor(Date.now() / 1000) + 3600).toString(16)}:new`;
+  for (const caches of revalidationCaches()) {
+    const original = cachedMedia(url);
+    await putAllCaches(caches, url, original);
+    let calls = 0;
+    globalThis.fetch = mockStream((item) => {
+      calls++;
+      return [{
+        url: item.url, status: Status.SUCCESS, source: Source.NOT_MODIFIED,
+        media: {
+          cache: renewed, placeholder: "", thumbnail: "",
+          mime: "", kind: "unknown", extension: "", file_size: 0, properties: {},
+        },
+      }];
+    });
+    const client = new Client({ connect: "https://server.test", caches });
+    const [result] = await client.batch([url]);
+    assert.ok(result.media);
+    assert.equal(result.media.cache, renewed, "304 must adopt the server's new token");
+    assert.equal(result.isFresh(), true);
+    assert.deepEqual(result.media.thumbnail.bytes, new Uint8Array([65, 66, 67]));
+    for (const key of ["url", "placeholder", "mime", "kind", "extension", "fileSize", "properties"] as const) {
+      assert.deepEqual(result.media[key], original[key], `304 must preserve cached ${key}`);
+    }
+    if (caches[0] instanceof MemoryCache) {
+      assert.equal(result.media, original, "memory media is updated by reference");
+    }
+    for (const cache of caches) {
+      const stored = await mediaFromCaches([cache], url);
+      assert.equal(stored?.cache, renewed, "each backend must persist the renewed token");
+      assert.equal(stored?.placeholder, "vector");
+      assert.deepEqual(stored?.thumbnail.bytes, new Uint8Array([65, 66, 67]));
+    }
+    const variant = "https://media.test/renew.svg?signature=second";
+    const [batchHit] = await client.batch([variant]);
+    assert.equal(batchHit.source, Source.CACHE);
+    for await (const streamHit of client.stream([url])) {
+      assert.equal(streamHit.source, Source.CACHE);
+      assert.equal(streamHit.media?.cache, renewed);
+    }
+    assert.equal(calls, 1, "renewed entries must avoid subsequent batch and stream requests");
+  }
+}
+
+async function testNotModifiedMissingAndEmptyTokens(): Promise<void> {
+  const url = "https://media.test/policy.svg?signature=signed";
+  for (const serverMedia of [undefined, {}, { mime: "" }, { cache: "" }]) {
+    for (const caches of revalidationCaches()) {
+      const original = cachedMedia(url);
+      await putAllCaches(caches, url, original);
+      globalThis.fetch = mockStream((item) => [{
+        url: item.url, status: Status.SUCCESS, source: Source.NOT_MODIFIED,
+        ...(serverMedia === undefined ? {} : { media: serverMedia }),
+      }]);
+      const client = new Client({ connect: "https://server.test", caches });
+      const [result] = await client.batch([url]);
+      assert.ok(result.media);
+      assert.equal(result.media.placeholder, "vector", "cached placeholder stays with its bytes");
+      assert.deepEqual(result.media.thumbnail.bytes, new Uint8Array([65, 66, 67]));
+      const uncacheable = "cache" in (serverMedia ?? {});
+      assert.equal(result.media.cache, uncacheable ? "" : "1:old");
+      assert.equal(result.isFresh(), false);
+      for (const cache of caches) {
+        const stored = await mediaFromCaches([cache], url);
+        if (uncacheable) {
+          assert.equal(stored, undefined, "empty renewed token must evict every backend");
+        } else {
+          assert.equal(stored?.cache, "1:old", "absent token must preserve the cached token");
+        }
+      }
+    }
+  }
+}
+
+async function testNotModifiedWithoutCachedMedia(): Promise<void> {
+  const url = "https://media.test/missing.svg";
+  for (const serverMedia of [undefined, { cache: "1:server" }]) {
+    for (const caches of revalidationCaches()) {
+      globalThis.fetch = mockStream((item) => [{
+        url: item.url, status: Status.SUCCESS, source: Source.NOT_MODIFIED,
+        ...(serverMedia === undefined ? {} : { media: serverMedia }),
+      }]);
+      const client = new Client({ connect: "https://server.test", caches });
+      const [result] = await client.batch([url]);
+      assert.equal(result.source, Source.NOT_MODIFIED);
+      assert.deepEqual(result.raw.media, serverMedia, "missing cached media leaves response unchanged");
+      if (serverMedia === undefined) assert.equal(result.media, null);
+      else assert.equal(result.media?.cache, serverMedia.cache);
+      assert.equal(await mediaFromCaches(caches, url), undefined, "304 must not fabricate a cache entry");
+    }
+  }
+}
+
 async function testStreamCacheFailure(): Promise<void> {
   const url = "https://media.test/cache-failure";
   for (const ending of ["\n", ""]) {
@@ -301,6 +420,9 @@ async function main(): Promise<void> {
     await testCanonicalCacheKeys();
     await testFailuresAreNotCachedFresh();
     await testIntermediateDoesNotWinCache();
+    await testNotModifiedRenewsOnlyCacheToken();
+    await testNotModifiedMissingAndEmptyTokens();
+    await testNotModifiedWithoutCachedMedia();
     await testStreamWithoutDeadline();
     await testStreamCacheFailure();
     console.log("URL identity, revalidation and streaming passed");

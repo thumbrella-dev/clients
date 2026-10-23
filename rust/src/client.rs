@@ -8,13 +8,22 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use crate::cache::{Cache, MemoryCache, media_from_caches, put_all_caches};
+use crate::cache::{Cache, MemoryCache, media_from_caches, put_all_caches, remove_from_caches};
 use crate::types::*;
 
 const DEFAULT_BASE: &str = "https://cloud.thumbrella.dev";
 const HTTP_TIMEOUT_SECS: u64 = 12;
 const MAX_BACKOFF_SECS: u64 = 60;
 const BATCH_MAX_ITEMS: usize = 12;
+
+fn parse_server_result(
+    item: serde_json::Value,
+) -> Result<(ResultData, Option<String>), serde_json::Error> {
+    // Capture field presence before serde defaults turn a missing token into "".
+    let renewed_cache =
+        item.get("media").and_then(|m| m.get("cache")).and_then(|c| c.as_str()).map(str::to_owned);
+    Ok((serde_json::from_value(item)?, renewed_cache))
+}
 
 //  global backoff
 
@@ -416,11 +425,11 @@ impl Client {
             let batch: BatchResponse =
                 resp.json().await.map_err(|e| Error::Http(code, e.to_string()))?;
 
-            for mut item in batch.items {
+            for value in batch.items {
+                let (mut item, renewed_cache) =
+                    parse_server_result(value).map_err(|e| Error::Http(code, e.to_string()))?;
                 item.resolve_pin(&request_url).map_err(|e| Error::Http(code, e))?;
-                if item.status != status::INTERMEDIATE {
-                    put_all_caches(&self.caches, &item.url, &item.media);
-                }
+                self.cache_server_result(&mut item, renewed_cache.as_deref());
                 done.insert(item.url.clone(), item);
             }
         }
@@ -541,7 +550,7 @@ impl Client {
                             if text.is_empty() {
                                 continue;
                             }
-                            if let Ok(result) = serde_json::from_str::<ResultData>(text)
+                            if let Ok(result) = serde_json::from_str::<serde_json::Value>(text)
                                 && let Some(r) = self.finish_stream_result(result, &mut pending, &request_url) {
                                     yield r;
                             }
@@ -553,7 +562,7 @@ impl Client {
                         let text = String::from_utf8_lossy(&buf);
                         let text = text.trim();
                         if !text.is_empty()
-                            && let Ok(result) = serde_json::from_str::<ResultData>(text)
+                            && let Ok(result) = serde_json::from_str::<serde_json::Value>(text)
                             && let Some(r) = self.finish_stream_result(result, &mut pending, &request_url) {
                                 yield r;
                         }
@@ -627,6 +636,24 @@ impl Client {
         (done, stale_items)
     }
 
+    fn cache_server_result(&self, result: &mut ResultData, renewed_cache: Option<&str>) {
+        if result.source.as_deref() == Some(source::NOT_MODIFIED) {
+            if let Some(mut cached) = media_from_caches(&self.caches, &result.url) {
+                if let Some(token) = renewed_cache {
+                    cached.cache = token.to_owned();
+                }
+                result.media = cached;
+                if renewed_cache == Some("") {
+                    remove_from_caches(&self.caches, &result.url);
+                } else {
+                    put_all_caches(&self.caches, &result.url, &result.media);
+                }
+            }
+        } else if result.status != status::INTERMEDIATE {
+            put_all_caches(&self.caches, &result.url, &result.media);
+        }
+    }
+
     /// Finalize a single result parsed from an NDJSON stream line.
     ///
     /// Terminal results are stored in the attached caches and dropped out of
@@ -634,10 +661,11 @@ impl Client {
     /// progress updates, not answers.
     fn finish_stream_result(
         &self,
-        mut result: ResultData,
+        item: serde_json::Value,
         pending: &mut HashSet<String>,
         request_url: &reqwest::Url,
     ) -> Option<ResultData> {
+        let (mut result, renewed_cache) = parse_server_result(item).ok()?;
         if result.url.is_empty() {
             return None;
         }
@@ -647,8 +675,8 @@ impl Client {
             result.pin = None;
             return Some(result);
         }
+        self.cache_server_result(&mut result, renewed_cache.as_deref());
         if result.status != status::INTERMEDIATE {
-            put_all_caches(&self.caches, &result.url, &result.media);
             pending.remove(&result.url);
         }
         Some(result)
@@ -685,12 +713,20 @@ mod tests {
 
         let mut intermediate = ResultData::new("https://media.test/pic.svg".to_string());
         intermediate.status = status::INTERMEDIATE.to_string();
-        client.finish_stream_result(intermediate, &mut pending, &request_url);
+        client.finish_stream_result(
+            serde_json::to_value(intermediate).unwrap(),
+            &mut pending,
+            &request_url,
+        );
         assert_eq!(client.caches()[0].len(), 0);
 
         let mut final_result = ResultData::new("https://media.test/pic.svg".to_string());
         final_result.status = status::SUCCESS.to_string();
-        client.finish_stream_result(final_result, &mut pending, &request_url);
+        client.finish_stream_result(
+            serde_json::to_value(final_result).unwrap(),
+            &mut pending,
+            &request_url,
+        );
         assert_eq!(client.caches()[0].len(), 1);
     }
 }

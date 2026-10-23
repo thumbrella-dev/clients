@@ -9,11 +9,13 @@
 
 import type { Client } from "./api.js";
 import { mediaFromCaches } from "./cache.js";
+import { observeRequests } from "./requests.js";
 import { Result, Source, Status } from "./types.js";
 
 /** A mounted element that can receive thumbnail updates. */
 export interface ThumbnailTarget {
   update(result: Result): void;
+  setRemotePending?(pending: boolean): void;
 }
 
 /** Maximum URLs the server accepts in one batch. */
@@ -36,6 +38,8 @@ export class ThumbnailManager {
   #targets = new Map<ThumbnailTarget, Set<string>>();
   /** Latest intermediate result per in-flight URL. */
   #intermediates = new Map<string, Result>();
+  #active = new Set<string>();
+  #remote = new Set<string>();
   #queue: string[] = [];
   #inflight = 0;
   #timer: ReturnType<typeof setTimeout> | null = null;
@@ -43,6 +47,13 @@ export class ThumbnailManager {
   setClient(client: Client): void {
     this.#client = client;
     if (this.#queue.length > 0) this.#schedule();
+  }
+
+  /** Join an already dispatched request and synchronously replay its best frame. */
+  join(url: string, target: ThumbnailTarget): boolean {
+    if (!this.#active.has(url)) return false;
+    this.request(url, target);
+    return true;
   }
 
   /** Register `target` for `url`.  Joining an active request is allowed. */
@@ -63,6 +74,7 @@ export class ThumbnailManager {
     }
     urls.add(url);
 
+    target.setRemotePending?.([...urls].some((u) => this.#remote.has(u)));
     const intermediate = this.#intermediates.get(url);
     if (intermediate) target.update(intermediate);
   }
@@ -72,12 +84,16 @@ export class ThumbnailManager {
     const urls = this.#targets.get(target);
     if (!urls) return;
     this.#targets.delete(target);
+    target.setRemotePending?.(false);
 
     for (const url of urls) {
       const subscribers = this.#subscribers.get(url);
       if (!subscribers) continue;
       subscribers.delete(target);
       if (subscribers.size > 0) continue;
+      // A view rebuild can temporarily remove every subscriber. The stream
+      // still runs, so retain its frames and let replacement elements rejoin.
+      if (this.#active.has(url)) continue;
 
       this.#subscribers.delete(url);
       this.#intermediates.delete(url);
@@ -108,6 +124,7 @@ export class ThumbnailManager {
     }
     if (batch.length === 0) return;
 
+    for (const url of batch) this.#active.add(url);
     this.#inflight += batch.length;
     void this.#run(client, batch);
   }
@@ -126,6 +143,7 @@ export class ThumbnailManager {
     const settle = (url: string, result?: Result): void => {
       if (!open.delete(url)) return;
       if (result) {
+        this.#setRemote(url, false);
         this.#deliver(url, result);
         this.#complete(url);
       }
@@ -133,6 +151,11 @@ export class ThumbnailManager {
       this.#schedule();
     };
 
+    const unsubscribe = observeRequests(client, (urls) => {
+      for (const url of urls) {
+        if (open.has(url)) this.#setRemote(url, true);
+      }
+    });
     try {
       for await (const result of client.stream(batch)) {
         if (!open.has(result.url)) continue;
@@ -145,12 +168,23 @@ export class ThumbnailManager {
     } catch (error) {
       const message = error instanceof Error ? error.message : "batch request failed";
       for (const url of [...open]) settle(url, Result.clientFail(url, message));
+    } finally {
+      unsubscribe();
     }
 
     // The stream can end without a terminal frame for a URL (for example when
     // the connection drops between frames).  Never leave an element loading.
     for (const url of [...open]) {
       settle(url, Result.clientFail(url, "stream connection lost"));
+    }
+  }
+
+  #setRemote(url: string, pending: boolean): void {
+    if (pending) this.#remote.add(url);
+    else this.#remote.delete(url);
+    for (const target of this.#subscribers.get(url) ?? []) {
+      const urls = this.#targets.get(target);
+      target.setRemotePending?.(!!urls && [...urls].some((u) => this.#remote.has(u)));
     }
   }
 
@@ -170,6 +204,12 @@ export class ThumbnailManager {
   }
 
   #complete(url: string): void {
+    for (const target of this.#subscribers.get(url) ?? []) {
+      const urls = this.#targets.get(target);
+      urls?.delete(url);
+      if (urls?.size === 0) this.#targets.delete(target);
+    }
+    this.#active.delete(url);
     this.#subscribers.delete(url);
     this.#intermediates.delete(url);
   }

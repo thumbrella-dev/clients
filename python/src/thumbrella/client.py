@@ -8,7 +8,7 @@ from typing import Any, AsyncIterator, Sequence
 
 import requests
 
-from .cache import Cache, MemoryCache, media_from_caches, put_all_caches
+from .cache import Cache, MemoryCache, media_from_caches, put_all_caches, remove_from_caches
 from .constants import DEFAULT_BASE, HTTP_TIMEOUT, Source, Status, BATCH_MAX_ITEMS
 from .result import Result, EncodedJpeg
 from .errors import ConnectionError, TimeoutError, VerifyError, ThumbError
@@ -380,9 +380,9 @@ def _result_from_server(
     source = item.get("source")
     placeholder = item.get("placeholder")
 
+    cached_media = media_from_caches(caches, url) if source == Source.NOT_MODIFIED else None
     if source == Source.NOT_MODIFIED:
-        media = media_from_caches(caches, url)
-        result = Result(item, media=media) if media else Result(item)
+        result = Result(item, media=cached_media) if cached_media is not None else Result(item)
     elif placeholder:
         thumb_b64 = item.get("media", {}).get("thumbnail", "")
         thumb = _placeholder_thumb(server_key, placeholder, thumb_b64)
@@ -393,7 +393,17 @@ def _result_from_server(
     if result.pin is not None:
         result.pin = urljoin(request_url, result.pin)
 
-    if result.status != Status.INTERMEDIATE:
+    if source == Source.NOT_MODIFIED:
+        if cached_media is not None:
+            server_media = item.get("media")
+            renewed_cache = server_media.get("cache") if isinstance(server_media, dict) else None
+            if isinstance(renewed_cache, str):
+                cached_media.cache = renewed_cache
+            if renewed_cache == "":
+                remove_from_caches(caches, result.url)
+            else:
+                put_all_caches(caches, result.url, cached_media)
+    elif result.status != Status.INTERMEDIATE:
         # Intermediates are progress frames, not answers. Caching one would
         # let a placeholder replace a final result.
         put_all_caches(caches, result.url, result.media)

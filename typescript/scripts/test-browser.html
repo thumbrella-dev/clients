@@ -1,0 +1,377 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Thumbrella rendering regression tests</title>
+<pre id="results">Running...</pre>
+<div id="fixtures"></div>
+<script type="module">
+import {
+  tbrSetup, Media, Result, Source, Status, failedPlaceholderDataUri,
+} from "../dev/tbr.js";
+
+const output = document.querySelector("#results");
+const fixtures = document.querySelector("#fixtures");
+const thumbnail = failedPlaceholderDataUri().split(",")[1];
+const entries = new Map();
+const cache = {
+  get: key => entries.get(key),
+  put: (key, media) => entries.set(key, media),
+  remove: key => entries.delete(key),
+  reset: () => entries.clear(),
+};
+tbrSetup({ connect: "http://unused.invalid", caches: [cache] });
+let sequence = 0;
+const frame = () => new Promise(resolve => requestAnimationFrame(resolve));
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+function media(url) {
+  return new Media({
+    url, thumbnail,
+    cache: `${(Math.floor(Date.now() / 1000) + 3600).toString(16)}:test`,
+  });
+}
+function result(url, status = Status.SUCCESS) {
+  const value = new Result({ url, status, source: Source.CACHE });
+  value.media = media(url);
+  return value;
+}
+function mount() {
+  const url = `https://media.test/${++sequence}.jpg`;
+  entries.set(url, media(url));
+  const el = document.createElement("tbr-thumb");
+  el.src = url;
+  fixtures.append(el);
+  return el;
+}
+const loaded = el => new Promise(resolve =>
+  el.addEventListener("tbr:loaded", event => resolve(event.detail.result), { once: true }));
+const image = el => el.shadowRoot.querySelector(".tbr-final");
+const placeholder = el => el.shadowRoot.querySelector(".tbr-placeholder");
+const spinner = el => el.shadowRoot.querySelector(".tbr-spinner");
+
+const tests = [
+  ["spinner starts only at fetch, not during cache checks or intermediate display", async () => {
+    const url = `https://media.test/${++sequence}.jpg`;
+    const originalFetch = globalThis.fetch;
+    let releaseCache, finish, fetched;
+    const cacheGate = new Promise(resolve => { releaseCache = resolve; });
+    const finalGate = new Promise(resolve => { finish = resolve; });
+    const fetchStarted = new Promise(resolve => { fetched = resolve; });
+    let fetches = 0;
+    tbrSetup({ caches: [{
+      async get() { await cacheGate; return undefined; },
+      set() {},
+      reset() {},
+    }] });
+    globalThis.fetch = async (input, init) => {
+      assert(String(input) === "http://unused.invalid/batch", "unexpected fetch");
+      assert(JSON.parse(init.body).items[0].url === url, "wrong outgoing URL");
+      fetches++;
+      fetched();
+      const encode = status => new TextEncoder().encode(JSON.stringify({
+        url, status, source: "render", media: { thumbnail, placeholder: "image" },
+      }) + "\n");
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(encode(Status.INTERMEDIATE));
+          finalGate.then(() => {
+            controller.enqueue(encode(Status.SUCCESS));
+            controller.close();
+          });
+        },
+      }));
+    };
+    try {
+      const el = document.createElement("tbr-thumb");
+      el.src = url;
+      fixtures.append(el);
+      el.update(result(url, Status.INTERMEDIATE));
+      assert(fetches === 0, "request started before cache preflight completed");
+      assert(getComputedStyle(spinner(el)).animationName === "none",
+        "intermediate image started spinner without a fetch");
+      releaseCache();
+      await fetchStarted;
+      assert(el.classList.contains("tbr-requested"), "actual fetch did not mark request pending");
+      const animation = spinner(el).getAnimations()[0];
+      assert(animation, "actual fetch did not enable delayed spinner");
+      animation.pause();
+      animation.currentTime = 350;
+      assert(getComputedStyle(spinner(el)).opacity === "1", "remote request spinner not visible");
+      const done = loaded(el);
+      finish();
+      await done;
+      assert(!el.classList.contains("tbr-requested"), "terminal result retained request state");
+      assert(getComputedStyle(spinner(el)).opacity === "0", "terminal result retained spinner");
+      assert(fetches === 1, "unexpected duplicate fetch");
+    } finally {
+      releaseCache();
+      finish();
+      globalThis.fetch = originalFetch;
+      tbrSetup({ caches: [cache] });
+    }
+  }],
+  ["new and replacement elements synchronously replay an in-flight placeholder", async () => {
+    const url = `https://media.test/${++sequence}.jpg`;
+    const client = tbrSetup({ caches: [cache] });
+    const originalStream = client.stream;
+    let finish, delivered, releaseCache;
+    const finalGate = new Promise(resolve => { finish = resolve; });
+    const intermediateDelivered = new Promise(resolve => { delivered = resolve; });
+    const cacheGate = new Promise(resolve => { releaseCache = resolve; });
+    let streamCalls = 0, cacheReads = 0, detachedEvents = 0;
+    const mountUrl = () => {
+      const el = document.createElement("tbr-thumb");
+      el.src = url;
+      fixtures.append(el);
+      return el;
+    };
+    client.stream = async function* (urls) {
+      assert(urls.length === 1 && urls[0] === url, "unexpected stream request");
+      streamCalls++;
+      const intermediate = result(url, Status.INTERMEDIATE);
+      intermediate.media.placeholder = "image";
+      yield intermediate;
+      delivered();
+      await finalGate;
+      yield result(url);
+    };
+    try {
+      const first = mountUrl();
+      first.addEventListener("tbr:loaded", () => detachedEvents++);
+      await intermediateDelivered;
+      const knownImage = placeholder(first).src;
+      assert(knownImage.startsWith("blob:"), "stream placeholder not applied");
+      tbrSetup({ caches: [{
+        async get() {
+          cacheReads++;
+          await cacheGate;
+          return undefined;
+        },
+        set() {},
+        reset() {},
+      }] });
+      const late = mountUrl();
+      late.addEventListener("tbr:loaded", () => detachedEvents++);
+      assert(placeholder(late).src === knownImage, "late element waited for cache lookup");
+      assert(late.classList.contains("tbr-intermediate"), "late element did not join stream");
+      assert(getComputedStyle(spinner(late)).animationName === "none",
+        "replaying an intermediate without a fetch started the spinner");
+
+      fixtures.replaceChildren();
+      const replacement = mountUrl();
+      assert(placeholder(replacement).src === knownImage, "view replacement lost known frame");
+      assert(replacement.classList.contains("tbr-intermediate"), "replacement did not join stream");
+      assert(cacheReads === 0, "in-flight join consulted the asynchronous cache");
+      const done = loaded(replacement);
+      finish();
+      await done;
+      assert(streamCalls === 1, "view replacement started a duplicate stream");
+      assert(detachedEvents === 0, "removed elements received the final result");
+    } finally {
+      finish();
+      releaseCache();
+      client.stream = originalStream;
+      tbrSetup({ caches: [cache] });
+    }
+  }],
+  ["fresh cache hits never animate", async () => {
+    const el = mount();
+    const value = await loaded(el);
+    assert(value.source === Source.CACHE, "expected a local cache hit");
+    assert(image(el).complete && image(el).naturalWidth > 1, "loaded before decoding");
+    for (let i = 0; i < 8; i++) {
+      await frame();
+      assert(getComputedStyle(image(el)).opacity === "1", "fresh image faded");
+      assert(getComputedStyle(image(el)).transitionProperty === "none", "transition restored");
+    }
+  }],
+  ["an asynchronous fresh-cache lookup never starts loading effects", async () => {
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    tbrSetup({ caches: [{
+      async get(url) {
+        await gate;
+        return new TextEncoder().encode(JSON.stringify({
+          url, thumbnail, cache: media(url).cache,
+        }));
+      },
+      set() {},
+      reset() {},
+    }] });
+    try {
+      const el = mount();
+      const done = loaded(el);
+      const deadline = performance.now() + 220;
+      while (performance.now() < deadline) {
+        await frame();
+        assert(!el.classList.contains("tbr-requested"), "loading effects started during cache lookup");
+        assert(getComputedStyle(spinner(el)).opacity === "0", "spinner appeared during cache lookup");
+      }
+      release();
+      await done;
+      await frame();
+      assert(getComputedStyle(image(el)).opacity === "1", "delayed cache hit faded");
+      assert(getComputedStyle(image(el)).transitionProperty === "none", "delayed hit animated");
+    } finally {
+      release();
+      tbrSetup({ caches: [cache] });
+    }
+  }],
+  ["fast revalidations never flash the spinner", async () => {
+    const el = mount();
+    await loaded(el);
+    el.classList.remove("tbr-loaded");
+    el.setRemotePending(true);
+    assert(getComputedStyle(spinner(el)).animationDelay === "0.15s", "wrong spinner delay");
+    const animation = spinner(el).getAnimations()[0];
+    assert(animation, "spinner reveal animation missing");
+    animation.pause();
+    animation.currentTime = 100;
+    assert(getComputedStyle(spinner(el)).opacity === "0", "spinner appeared before delay");
+    el.update(result(el.src, Status.INTERMEDIATE));
+    assert(spinner(el).getAnimations()[0] === animation, "intermediate restarted spinner delay");
+    assert(getComputedStyle(spinner(el)).opacity === "0", "intermediate bypassed delay");
+    const done = loaded(el);
+    el.update(result(el.src));
+    await done;
+    assert(getComputedStyle(spinner(el)).opacity === "0", "completed request flashed spinner");
+    assert(spinner(el).getAnimations().length === 0, "completed request retained spinner animation");
+  }],
+  ["slow requests show the spinner and completion hides it immediately", async () => {
+    const el = mount();
+    await loaded(el);
+    el.classList.remove("tbr-loaded");
+    el.setRemotePending(true);
+    assert(getComputedStyle(spinner(el)).opacity === "0", "spinner did not start hidden");
+    const animation = spinner(el).getAnimations()[0];
+    animation.pause();
+    animation.currentTime = 149;
+    assert(getComputedStyle(spinner(el)).opacity === "0", "spinner appeared before 150 ms");
+    animation.currentTime = 250;
+    const midway = Number(getComputedStyle(spinner(el)).opacity);
+    assert(midway > 0 && midway < 1, "spinner did not fade in after delay");
+    animation.currentTime = 350;
+    assert(getComputedStyle(spinner(el)).opacity === "1", "slow request spinner never appeared");
+    const done = loaded(el);
+    el.update(result(el.src));
+    await done;
+    assert(getComputedStyle(spinner(el)).opacity === "0", "spinner faded out instead of hiding");
+  }],
+  ["revalidation of an already loaded image also delays the spinner", async () => {
+    const el = mount();
+    await loaded(el);
+    el.update(result(el.src, Status.INTERMEDIATE));
+    el.setRemotePending(true);
+    assert(getComputedStyle(spinner(el)).opacity === "0", "loaded intermediate skipped delay");
+    const animation = spinner(el).getAnimations()[0];
+    animation.pause();
+    animation.currentTime = 350;
+    assert(getComputedStyle(spinner(el)).opacity === "1", "loaded intermediate never showed spinner");
+    const done = loaded(el);
+    el.update(result(el.src));
+    await done;
+    assert(getComputedStyle(spinner(el)).opacity === "0", "loaded intermediate spinner remained");
+  }],
+  ["intermediate-to-final transition never exposes the background", async () => {
+    const el = mount();
+    await loaded(el);
+    // Give the element an uncached URL while detached so only explicit updates run.
+    el.remove();
+    const url = `https://media.test/${++sequence}.jpg`;
+    el.src = url;
+    const fresh = media(url);
+    entries.set(url, fresh);
+    fixtures.append(el);
+    await loaded(el);
+    // Reset the visual state without starting another request.
+    el.classList.remove("tbr-loaded");
+    el.update(result(url, Status.INTERMEDIATE));
+    await placeholder(el).decode();
+    await frame();
+    assert(getComputedStyle(image(el)).opacity === "0", "final image not reset before transition");
+    const done = loaded(el);
+    el.update(result(url));
+    assert(!el.classList.contains("tbr-loaded"), "revealed final image before decode");
+    await done;
+    getComputedStyle(image(el)).opacity;
+    const animation = image(el).getAnimations().find(a => a.transitionProperty === "opacity");
+    assert(animation, "normal results should still fade");
+    animation.pause();
+    for (const time of [0, 50, 175, 300, 350]) {
+      animation.currentTime = time;
+      const bottom = Number(getComputedStyle(placeholder(el)).opacity);
+      const top = Number(getComputedStyle(image(el)).opacity);
+      assert(bottom + top * (1 - bottom) >= 0.999, "background visible between layers");
+      if (time === 175) assert(top > 0 && top < 1, "normal result did not fade");
+    }
+    assert(getComputedStyle(image(el)).opacity === "1", "fade did not complete");
+  }],
+  ["normal results use the fixed fade duration", async () => {
+    const el = mount();
+    await loaded(el);
+    el.classList.remove("tbr-loaded");
+    await frame();
+    const done = loaded(el);
+    el.update(result(el.src));
+    await done;
+    await frame();
+    assert(getComputedStyle(image(el)).transitionDuration === "0.35s", "wrong duration");
+  }],
+  ["a superseded decode cannot publish an obsolete result", async () => {
+    const el = mount();
+    await loaded(el);
+    const events = [];
+    el.addEventListener("tbr:loaded", event => events.push(event.detail.result));
+    const old = result(el.src);
+    el.update(old);
+    const next = `https://media.test/${++sequence}.jpg`;
+    entries.set(next, media(next));
+    el.src = next;
+    await loaded(el);
+    await frame();
+    assert(events.length === 1 && events[0].url === next, "obsolete decode published");
+  }],
+  ["a disconnected decode does not publish a result", async () => {
+    const el = mount();
+    await loaded(el);
+    let events = 0;
+    el.addEventListener("tbr:loaded", () => events++);
+    el.update(result(el.src));
+    el.remove();
+    await frame();
+    await frame();
+    assert(events === 0, "detached element published a result");
+    const done = loaded(el);
+    fixtures.append(el);
+    await done;
+  }],
+  ["invalid image bytes report an unavailable result", async () => {
+    const el = mount();
+    await loaded(el);
+    const invalid = result(el.src);
+    invalid.media = new Media({ url: el.src, thumbnail: btoa("not a JPEG") });
+    const done = loaded(el);
+    el.update(invalid);
+    const value = await done;
+    assert(value.status === Status.UNAVAILABLE, "decode error was reported as success");
+    assert(value.message.includes("decoded"), "decode failure reason missing");
+  }],
+];
+
+const messages = [];
+try {
+  for (const [name, test] of tests) {
+    await test();
+    messages.push(`PASS ${name}`);
+    output.textContent = messages.join("\n");
+    fixtures.replaceChildren();
+  }
+  document.title = `PASS: ${tests.length} rendering tests`;
+  output.dataset.status = "passed";
+} catch (error) {
+  output.textContent = [...messages, `FAIL ${error.stack}`].join("\n");
+  output.dataset.status = "failed";
+  document.title = "FAIL: rendering tests";
+  console.error(error);
+}
+</script>

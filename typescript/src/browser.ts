@@ -348,6 +348,7 @@ styles?.replaceSync(`
   }
   :host([hidden]) { display: none; }
 
+  /* Keep the lower image opaque while the final image fades over it. */
   .tbr-placeholder {
     position: absolute;
     inset: 0;
@@ -356,7 +357,6 @@ styles?.replaceSync(`
     object-fit: cover;
     display: block;
     z-index: 1;
-    transition: opacity 0.25s ease;
   }
 
   .tbr-final {
@@ -417,10 +417,6 @@ styles?.replaceSync(`
     animation: none;
   }
 
-  :host(.tbr-loaded) .tbr-placeholder {
-    opacity: 0;
-  }
-
   /* Spinner */
 
   .tbr-spinner {
@@ -431,7 +427,6 @@ styles?.replaceSync(`
     justify-content: center;
     pointer-events: none;
     opacity: 0;
-    transition: opacity 0.2s;
     z-index: 4;
   }
 
@@ -445,23 +440,18 @@ styles?.replaceSync(`
     animation: tbr-spin 0.8s linear infinite;
   }
 
-  :host(.tbr-requested) .tbr-spinner,
-  :host(.tbr-intermediate) .tbr-spinner {
+  /* Fast revalidations finish before the spinner appears; hiding is immediate. */
+  :host(.tbr-requested) .tbr-spinner {
     opacity: 1;
-  }
-
-  :host(.tbr-loaded) .tbr-spinner {
-    opacity: 0;
-  }
-
-  /* A loaded element re-entering the in-flight state (stale cached image
-     shown while the server revalidates) keeps its image and shows the
-     spinner again. */
-  :host(.tbr-loaded.tbr-intermediate) .tbr-spinner {
-    opacity: 1;
+    animation: tbr-spinner-reveal 0.2s ease 0.15s both;
   }
 
   /* Keyframes */
+
+  @keyframes tbr-spinner-reveal {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
 
   @keyframes tbr-shimmer {
     0%, 100% { filter: brightness(1); }
@@ -517,6 +507,7 @@ export class TbrThumb extends _TbrBase {
   #pending = false;
   #rendered = false;
   #url: string | null = null;
+  #resultVersion = 0;
   /* True once an intermediate frame carrying a real image (not a server
      placeholder) has been applied. */
   #imageIntermediate = false;
@@ -548,6 +539,8 @@ export class TbrThumb extends _TbrBase {
     // Keep the rendered image, but stop the in-flight subscription.  A
     // reconnect before completion registers the URL again with the manager.
     this.#pending = false;
+    this.#resultVersion++;
+    this.setRemotePending(false);
     _state.manager?.release(this);
   }
 
@@ -559,6 +552,11 @@ export class TbrThumb extends _TbrBase {
     this.#reset();
     this.#render();
     this.#load();
+  }
+
+  /** @internal Called only when the client starts or completes a remote request. */
+  setRemotePending(pending: boolean): void {
+    this.classList.toggle("tbr-requested", pending);
   }
 
   /** @internal Called by the page request manager. */
@@ -578,6 +576,7 @@ export class TbrThumb extends _TbrBase {
   // Internal DOM
 
   #reset(): void {
+    this.#resultVersion++;
     this.#loaded = false;
     this.#pending = false;
     this.#imageIntermediate = false;
@@ -589,8 +588,8 @@ export class TbrThumb extends _TbrBase {
     const escaped = name.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 
     this.#shadow.innerHTML = `
-      <img class="tbr-placeholder" src="${PLACEHOLDER_SVG}" alt="${escaped}" loading="lazy" decoding="async" />
-      <img class="tbr-final" src="${CLEAR_PIXEL}" alt="" loading="lazy" decoding="async" />
+      <img class="tbr-placeholder" src="${PLACEHOLDER_SVG}" alt="${escaped}" decoding="async" />
+      <img class="tbr-final" src="${CLEAR_PIXEL}" alt="" decoding="async" />
       <div class="tbr-shimmer" aria-hidden="true"></div>
       <div class="tbr-spinner" aria-hidden="true"></div>
     `;
@@ -612,6 +611,8 @@ export class TbrThumb extends _TbrBase {
       this.#applyResult(Result.clientFail(this.#url, "tbrSetup() has not been called"));
       return;
     }
+
+    if (manager.join(this.#url, this)) return;
 
     void this.#seedFromCache(this.#url, manager);
   }
@@ -643,7 +644,6 @@ export class TbrThumb extends _TbrBase {
     }
 
     if (this.#url !== url || !this.isConnected || this.#loaded) return;
-    this.classList.add("tbr-requested");
     manager.request(url, this);
   }
 
@@ -663,10 +663,9 @@ export class TbrThumb extends _TbrBase {
   }
 
   #applyResult(result: Result, instant = false): void {
-    this.classList.remove("tbr-requested", "tbr-intermediate", "tbr-has-intermediate");
-    this.classList.add("tbr-loaded", "tbr-" + result.status.toLowerCase());
-    this.#loaded = true;
-
+    const version = ++this.#resultVersion;
+    this.#loaded = false;
+    const img = this.#finalImg;
     const thumb = result.media?.thumbnail;
     if (thumb) {
       const { bytes, key } = thumb;
@@ -674,21 +673,31 @@ export class TbrThumb extends _TbrBase {
       const blobUrl = isPlaceholder
         ? cachedBlobUrl(key, bytes)
         : URL.createObjectURL(new Blob([bytes as BlobPart], { type: "image/jpeg" }));
-      if (instant) {
-        // Skip the fade-in: a cache hit represents no work happening.
-        this.#finalImg.style.transition = "none";
-        this.#finalImg.src = blobUrl;
-        if (typeof requestAnimationFrame === "function") {
-          requestAnimationFrame(() => {
-            this.#finalImg.style.transition = "";
-          });
-        } else {
-          this.#finalImg.style.transition = "";
-        }
-      } else {
-        this.#finalImg.src = blobUrl;
-      }
+      img.src = blobUrl;
+      void img.decode().then(
+        () => this.#finishResult(result, instant, version),
+        (error: unknown) => {
+          if (version !== this.#resultVersion || !this.isConnected) return;
+          console.warn("Thumbrella thumbnail decode failed", error);
+          img.src = CLEAR_PIXEL;
+          this.#finishResult(
+            Result.clientFail(result.url, "thumbnail image could not be decoded"),
+            true,
+            version,
+          );
+        },
+      );
+      return;
     }
+    this.#finishResult(result, instant, version);
+  }
+
+  #finishResult(result: Result, instant: boolean, version: number): void {
+    if (version !== this.#resultVersion || !this.isConnected) return;
+    this.#finalImg.style.transition = instant ? "none" : "";
+    this.classList.remove("tbr-requested", "tbr-intermediate", "tbr-has-intermediate");
+    this.classList.add("tbr-loaded", "tbr-" + result.status.toLowerCase());
+    this.#loaded = true;
 
     this.dispatchEvent(
       new CustomEvent("tbr:loaded", {

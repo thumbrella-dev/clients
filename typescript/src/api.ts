@@ -1,5 +1,6 @@
 import type { ClientCache } from "./cache.js";
-import { MemoryCache, mediaFromCaches, putAllCaches } from "./cache.js";
+import { notifyRequest } from "./requests.js";
+import { MemoryCache, mediaFromCaches, putAllCaches, removeFromCaches } from "./cache.js";
 import { CLIENT_MAJOR_MINOR } from "./version.js";
 import {
   Result,
@@ -306,6 +307,7 @@ export class Client {
     const body = JSON.stringify({ items: stale });
     const url = `${this.baseUrl}/batch`;
     try {
+      notifyRequest(this, stale.map((item) => item.url));
       const resp = await fetch(url, {
         method: "POST",
         headers: {
@@ -587,10 +589,16 @@ async function resultFromServer(
     const url = (item.url as string) ?? "";
     const media = await mediaFromCaches(caches, url);
     if (media) {
+      const renewedCache = (item.media as Record<string, unknown> | undefined)?.cache;
+      if (typeof renewedCache === "string") media.cache = renewedCache;
       r.media = media;
-      await putAllCaches(caches, r.url, r.media);
-      return r;
+      if (renewedCache === "") {
+        await removeFromCaches(caches, r.url);
+      } else {
+        await putAllCaches(caches, r.url, r.media);
+      }
     }
+    return r;
   }
 
   if (placeholder) {

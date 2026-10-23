@@ -378,7 +378,7 @@ impl ResultData {
 #[derive(Debug, Deserialize)]
 pub(crate) struct BatchResponse {
     #[serde(default)]
-    pub items: Vec<ResultData>,
+    pub items: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
