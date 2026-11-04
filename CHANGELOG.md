@@ -1,8 +1,8 @@
 # Thumbrella clients changelog
 
-## Development 
+## 2.3.1 - 2026/11/04 
 
-- Support "cache: uncached" on requests
+- Support "cache: uncached" on requests  /typescript /python /rust
 
 ## 2.3.0 - 2026/11/03
 
