@@ -15,6 +15,7 @@ import {
   EncodedJpeg,
   Status,
   Source,
+  UNCACHED,
   VerifyError,
   ConnectionError,
   TimeoutError,
@@ -357,8 +358,16 @@ export class Client {
           if (!trimmed) continue;
           const resultData = parseBatchLine(trimmed);
           if (!resultData) continue;
-          const result = await resultFromServer(resultData, this.caches, this.baseUrl, url);
           const itemUrl = resultData.url as string | undefined;
+          const pendingRequest = findPending(
+            pending,
+            String(resultData.key ?? itemUrl ?? ""),
+            itemUrl,
+          );
+          const cacheEnabled = pendingRequest ? !pendingRequest.noCache : true;
+          const result = await resultFromServer(
+            resultData, this.caches, this.baseUrl, url, cacheEnabled,
+          );
           // Only a terminal result completes a request. Intermediate results
           // must not remove it from `pending`, otherwise an interrupted stream
           // leaves that element stuck in the loading state forever.
@@ -371,8 +380,16 @@ export class Client {
       if (buffer.trim()) {
         const resultData = parseBatchLine(buffer.trim());
         if (resultData) {
-          const result = await resultFromServer(resultData, this.caches, this.baseUrl, url);
           const itemUrl = resultData.url as string | undefined;
+          const pendingRequest = findPending(
+            pending,
+            String(resultData.key ?? itemUrl ?? ""),
+            itemUrl,
+          );
+          const cacheEnabled = pendingRequest ? !pendingRequest.noCache : true;
+          const result = await resultFromServer(
+            resultData, this.caches, this.baseUrl, url, cacheEnabled,
+          );
           if (itemUrl && resultData.status !== Status.INTERMEDIATE) {
             settlePending(pending, result, itemUrl);
           }
@@ -481,6 +498,8 @@ interface ResolvedRequest {
   url: string;
   key?: string;
   identity: string;
+  /** True when the caller supplied the `uncached` sentinel. */
+  noCache: boolean;
   /** Base wire item, including any future per-request fields. */
   wire: WireItem;
 }
@@ -505,25 +524,49 @@ function resolveRequest(request: ThumbRequest): ResolvedRequest {
     return {
       url: request,
       identity: requestIdentity(request),
+      noCache: false,
       wire: { url: request },
     };
   }
-  const { key: rawKey, ...rest } = request;
+  const { key: rawKey, cache: rawCache, ...rest } = request;
   const key = rawKey?.trim() || undefined;
   const wire: WireItem = { ...rest, url: request.url };
   if (key) wire.key = key;
   else delete wire.key;
+  if (typeof rawCache === "string") wire.cache = rawCache;
+  else delete wire.cache;
   return {
     url: request.url,
     key,
     identity: requestIdentity(request.url, key),
+    noCache: isUncached(rawCache),
     wire,
   };
+}
+
+/** True when the caller passed the `uncached` sentinel (trimmed, case-insensitive). */
+function isUncached(value: unknown): boolean {
+  return typeof value === "string" && value.trim().toLowerCase() === UNCACHED;
 }
 
 /** Effective identity of a result, tolerating older servers without `key`. */
 function resultIdentity(result: Result): string {
   return result.key || result.url;
+}
+
+/** Find the pending request matching a server result, if still pending. */
+function findPending(
+  pending: Map<string, ResolvedRequest>,
+  identity: string,
+  itemUrl: string | undefined,
+): ResolvedRequest | undefined {
+  const byIdentity = pending.get(identity);
+  if (byIdentity) return byIdentity;
+  if (!itemUrl) return undefined;
+  for (const request of pending.values()) {
+    if (request.url === itemUrl) return request;
+  }
+  return undefined;
 }
 
 /**
@@ -537,13 +580,8 @@ function settlePending(
   result: Result,
   itemUrl: string,
 ): void {
-  if (pending.delete(resultIdentity(result))) return;
-  for (const [identity, request] of pending) {
-    if (request.url === itemUrl) {
-      pending.delete(identity);
-      return;
-    }
-  }
+  const request = findPending(pending, resultIdentity(result), itemUrl);
+  if (request) pending.delete(request.identity);
 }
 
 /**
@@ -610,6 +648,12 @@ async function preflightUrls(
       continue;
     }
 
+    // "uncached" opts out of the client cache entirely; still send it.
+    if (request.noCache) {
+      stale.push({ request, wire: { ...request.wire } });
+      continue;
+    }
+
     const media = await mediaFromCaches(caches, request.url, request.key);
     if (media?.isFresh()) {
       const result = new Result({
@@ -623,9 +667,10 @@ async function preflightUrls(
       continue;
     }
 
-    // Stale - must go to server.  Future per-request fields ride along.
+    // Stale - must go to server.  Future per-request fields ride along.  A
+    // caller-supplied cache token wins over the client's internal token.
     const wire: WireItem = { ...request.wire };
-    if (media?.cache) wire.cache = media.cache;
+    if (wire.cache === undefined && media?.cache) wire.cache = media.cache;
     stale.push({ request, wire });
   }
 
@@ -672,6 +717,7 @@ async function resultFromServer(
   caches: readonly ClientCache[],
   serverKey: string,
   requestUrl: string,
+  cacheEnabled = true,
 ): Promise<Result> {
   const r = new Result(item);
   if (r.pin !== null) {
@@ -687,7 +733,7 @@ async function resultFromServer(
 
   if (source === Source.NOT_MODIFIED) {
     const url = (item.url as string) ?? "";
-    const media = await mediaFromCaches(caches, url, key);
+    const media = cacheEnabled ? await mediaFromCaches(caches, url, key) : undefined;
     if (media) {
       const renewedCache = (item.media as Record<string, unknown> | undefined)?.cache;
       if (typeof renewedCache === "string") media.cache = renewedCache;
@@ -711,7 +757,7 @@ async function resultFromServer(
     r.media = media;
   }
 
-  if (r.status !== Status.INTERMEDIATE) {
+  if (cacheEnabled && r.status !== Status.INTERMEDIATE) {
     // Intermediates are progress frames, not answers.  Caching one would let a
     // placeholder replace a final result.
     await putAllCaches(caches, r.url, r.media, key);

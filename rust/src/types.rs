@@ -38,6 +38,13 @@ pub mod source {
     pub const CLIENT: &str = "client";
 }
 
+/// Sentinel `cache` value that disables caching for a request.
+///
+/// Pass it as a request's `cache` field to bypass both the client's internal
+/// caches and the server cache.  The value is sent to the server unchanged
+/// and results are not stored locally.
+pub const UNCACHED: &str = "uncached";
+
 //  errors
 
 #[derive(Debug, thiserror::Error)]
@@ -307,6 +314,12 @@ pub struct ThumbRequestItem {
     /// Optional cache identity override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
+    /// Cache token forwarded to the server unchanged.
+    ///
+    /// Set this to [`UNCACHED`] to bypass the client's internal caches and the
+    /// server cache for this request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<String>,
     /// Additional per-request fields, passed through to the server verbatim.
     ///
     /// This keeps the client forward compatible as new per-request options are
@@ -330,9 +343,31 @@ impl ThumbRequestItem {
         self
     }
 
+    /// Set the cache token forwarded to the server unchanged.
+    ///
+    /// Pass [`UNCACHED`] to bypass caching for this request.
+    pub fn with_cache(mut self, cache: impl Into<String>) -> Self {
+        self.cache = Some(cache.into());
+        self
+    }
+
     /// Add a per-request option that is forwarded to the server.
     pub fn with_option(mut self, name: impl Into<String>, value: impl Into<serde_json::Value>) -> Self {
-        self.extra.insert(name.into(), value.into());
+        let name = name.into();
+        let value = value.into();
+        if name == "cache" {
+            match value {
+                serde_json::Value::String(cache) => {
+                    self.cache = Some(cache);
+                    return self;
+                }
+                other => {
+                    self.extra.insert(name, other);
+                    return self;
+                }
+            }
+        }
+        self.extra.insert(name, value);
         self
     }
 }
@@ -367,6 +402,22 @@ impl ThumbRequest {
             Self::Url(_) => None,
             Self::Item(item) => item.key.as_deref().filter(|k| !k.is_empty()),
         }
+    }
+
+    /// The caller-supplied cache token, if any.
+    ///
+    /// An empty string is returned as `Some("")`: it was explicitly supplied
+    /// and must be forwarded unchanged.
+    pub fn cache(&self) -> Option<&str> {
+        match self {
+            Self::Url(_) => None,
+            Self::Item(item) => item.cache.as_deref(),
+        }
+    }
+
+    /// True when the caller passed the [`UNCACHED`] sentinel.
+    pub fn cache_disabled(&self) -> bool {
+        self.cache().is_some_and(|cache| cache.trim().eq_ignore_ascii_case(UNCACHED))
     }
 
     /// Effective cache identity: the caller key, otherwise the canonical URL.

@@ -314,6 +314,49 @@ async function testBrowserWiring(): Promise<void> {
   }
 }
 
+async function testUncachedRequests(): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  const bodies: { url: string; cache?: string }[] = [];
+  let calls = 0;
+  globalThis.fetch = async (_input, init) => {
+    calls++;
+    const { items } = JSON.parse(String(init?.body)) as {
+      items: { url: string; cache?: string }[];
+    };
+    bodies.push(...items);
+    return new Response(items.map(({ url }) => JSON.stringify({
+      url,
+      status: "success",
+      source: "render",
+      media: { ...media(), cache: "" },
+    })).join("\n"));
+  };
+  try {
+    const url = "https://media.test/uncached.glb";
+    const cache = new MemoryCache();
+    // A fresh internal entry must be ignored for an uncached request.
+    await putAllCaches([cache], url, new Media(media()));
+    const client = new Client({ connect: "https://server.test", caches: [cache] });
+
+    const result = await client.thumb({ url, cache: "uncached" });
+    assert.equal(calls, 1);
+    assert.equal(bodies[0].cache, "uncached");
+    assert.equal(result.source, Source.RENDER);
+    assert.equal(result.media?.cache, "");
+
+    // The uncached result was not stored: the seeded fresh entry still wins.
+    const restored = await client.thumb(url);
+    assert.equal(restored.source, Source.CACHE);
+    assert.equal(calls, 1);
+
+    // Caller-supplied tokens are forwarded unchanged.
+    await client.thumb({ url: "https://media.test/token.glb", cache: "abc:def" });
+    assert.equal(bodies.at(-1)?.cache, "abc:def");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
 async function main(): Promise<void> {
   await testByteBackends();
   await testEmptyAndFailingCaches();
@@ -321,6 +364,7 @@ async function main(): Promise<void> {
   await testConnectConfiguration();
   await testStackRemoval();
   await testIndexedDbBudget();
+  await testUncachedRequests();
   await testBrowserWiring();
   console.log("Byte caches, IndexedDB budget and browser wiring passed");
 }

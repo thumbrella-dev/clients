@@ -14,6 +14,15 @@ export const Status = {
 } as const;
 export type Status = (typeof Status)[keyof typeof Status];
 
+/**
+ * Special `cache` value that tells the server not to use any cache.
+ *
+ * Pass this as a request's `cache` field to bypass both the client's internal
+ * caches and the server cache for that request.  The value is sent to the
+ * server unchanged and results are not stored locally.
+ */
+export const UNCACHED = "uncached";
+
 export const Source = {
   RENDER: "render",
   SHORTCUT: "shortcut",
@@ -52,12 +61,17 @@ export type FileKind = (typeof FileKind)[keyof typeof FileKind];
  * cache identity for that request, which is useful when the same object is
  * addressed by multiple, changing URLs (signed storage links, for example).
  *
+ * The optional `cache` value is forwarded to the server unchanged.  Pass
+ * {@link UNCACHED} (`"uncached"`) to bypass the client's internal caches and
+ * the server cache for this request.
+ *
  * Any other properties are passed through to the server as-is.  This keeps
  * the client forward compatible as new per-request options are added.
  */
 export interface ThumbRequestItem {
   url: string;
   key?: string;
+  cache?: string;
   [field: string]: unknown;
 }
 

@@ -4,7 +4,7 @@ use async_stream::stream;
 use futures_core::Stream;
 use futures_util::StreamExt;
 use reqwest::Client as HttpClient;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -81,6 +81,23 @@ fn settle_pending(pending: &mut HashMap<String, ThumbRequest>, identity: &str, u
     if let Some(key) = matched {
         pending.remove(&key);
     }
+}
+
+/// Identities and URLs of wire items that requested `uncached`.
+fn uncached_identities(items: &[serde_json::Value]) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for item in items {
+        let disabled = item
+            .get("cache")
+            .and_then(|c| c.as_str())
+            .is_some_and(|c| c.trim().eq_ignore_ascii_case(UNCACHED));
+        if disabled {
+            let request = request_from_item(item);
+            out.insert(request.identity().into_owned());
+            out.insert(request.as_url().to_string());
+        }
+    }
+    out
 }
 
 //  global backoff
@@ -478,6 +495,7 @@ impl Client {
 
         // Split into server-sized chunks.
         for chunk in stale_items.chunks(BATCH_MAX_ITEMS) {
+            let uncached = uncached_identities(chunk);
             let body = serde_json::json!({ "items": chunk });
             let resp = match self
                 .request("POST", "/batch")
@@ -511,7 +529,11 @@ impl Client {
                 let (mut item, renewed_cache) =
                     parse_server_result(value).map_err(|e| Error::Http(code, e.to_string()))?;
                 item.resolve_pin(&request_url).map_err(|e| Error::Http(code, e))?;
-                self.cache_server_result(&mut item, renewed_cache.as_deref());
+                let cache_enabled = {
+                    let identity = item.identity().to_string();
+                    !uncached.contains(&identity) && !uncached.contains(&item.url)
+                };
+                self.cache_server_result(&mut item, renewed_cache.as_deref(), cache_enabled);
                 done.insert(item.url.clone(), item.clone());
                 done.insert(item.identity().to_string(), item);
             }
@@ -578,6 +600,7 @@ impl Client {
                 }
             } else {
                 for chunk in stale.chunks(BATCH_MAX_ITEMS) {
+                    let uncached = uncached_identities(chunk);
                     let mut pending: HashMap<String, ThumbRequest> = chunk
                         .iter()
                         .map(|item| {
@@ -631,7 +654,7 @@ impl Client {
                                 continue;
                             }
                             if let Ok(result) = serde_json::from_str::<serde_json::Value>(text)
-                                && let Some(r) = self.finish_stream_result(result, &mut pending, &request_url) {
+                                && let Some(r) = self.finish_stream_result(result, &mut pending, &request_url, &uncached) {
                                     yield r;
                             }
                         }
@@ -643,7 +666,7 @@ impl Client {
                         let text = text.trim();
                         if !text.is_empty()
                             && let Ok(result) = serde_json::from_str::<serde_json::Value>(text)
-                            && let Some(r) = self.finish_stream_result(result, &mut pending, &request_url) {
+                            && let Some(r) = self.finish_stream_result(result, &mut pending, &request_url, &uncached) {
                                 yield r;
                         }
                     }
@@ -699,6 +722,12 @@ impl Client {
             }
 
             // Check caches for a fresh entry.
+            // "uncached" opts out of the client cache entirely; still send it.
+            if request.cache_disabled() {
+                stale_items.push(wire_item(request, None));
+                continue;
+            }
+
             let media = media_from_caches(&self.caches, identity.as_ref());
             if let Some(cached) = &media
                 && cached.is_fresh()
@@ -712,15 +741,29 @@ impl Client {
                 continue;
             }
 
-            let item =
-                wire_item(request, media.as_ref().map(|m| m.cache.as_str()).filter(|c| !c.is_empty()));
+            // A caller-supplied cache token wins over the client's internal
+            // token; otherwise include it so the server can revalidate.
+            let cache_override = if request.cache().is_some() {
+                None
+            } else {
+                media.as_ref().map(|m| m.cache.as_str()).filter(|c| !c.is_empty())
+            };
+            let item = wire_item(request, cache_override);
             stale_items.push(item);
         }
 
         (done, stale_items)
     }
 
-    fn cache_server_result(&self, result: &mut ResultData, renewed_cache: Option<&str>) {
+    fn cache_server_result(
+        &self,
+        result: &mut ResultData,
+        renewed_cache: Option<&str>,
+        cache_enabled: bool,
+    ) {
+        if !cache_enabled {
+            return;
+        }
         let identity = result.identity().to_string();
         if result.source.as_deref() == Some(source::NOT_MODIFIED) {
             if let Some(mut cached) = media_from_caches(&self.caches, &identity) {
@@ -749,6 +792,7 @@ impl Client {
         item: serde_json::Value,
         pending: &mut HashMap<String, ThumbRequest>,
         request_url: &reqwest::Url,
+        uncached: &HashSet<String>,
     ) -> Option<ResultData> {
         let (mut result, renewed_cache) = parse_server_result(item).ok()?;
         if result.url.is_empty() {
@@ -761,7 +805,8 @@ impl Client {
             result.pin = None;
             return Some(result);
         }
-        self.cache_server_result(&mut result, renewed_cache.as_deref());
+        let cache_enabled = !uncached.contains(&identity) && !uncached.contains(&result.url);
+        self.cache_server_result(&mut result, renewed_cache.as_deref(), cache_enabled);
         if result.status != status::INTERMEDIATE {
             settle_pending(pending, &identity, &result.url);
         }
@@ -808,6 +853,7 @@ mod tests {
             serde_json::to_value(intermediate).unwrap(),
             &mut pending,
             &request_url,
+            &HashSet::new(),
         );
         assert_eq!(client.caches()[0].len(), 0);
 
@@ -817,7 +863,45 @@ mod tests {
             serde_json::to_value(final_result).unwrap(),
             &mut pending,
             &request_url,
+            &HashSet::new(),
         );
         assert_eq!(client.caches()[0].len(), 1);
+    }
+
+    #[test]
+    fn caller_cache_is_forwarded_unchanged() {
+        let client = Client::with_caches(None, vec![]);
+        let request =
+            ThumbRequest::Item(ThumbRequestItem::new("https://media.test/a.obj").with_cache("abc:def"));
+        let (done, stale) = client.preflight(&[request]);
+        assert!(done.is_empty());
+        assert_eq!(stale[0]["cache"], "abc:def");
+    }
+
+    #[test]
+    fn uncached_requests_skip_the_client_cache() {
+        let client = Client::with_caches(None, vec![Box::new(MemoryCache::default())]);
+        let request_url = reqwest::Url::parse("https://server.test/batch").unwrap();
+        let request = ThumbRequest::Item(
+            ThumbRequestItem::new("https://media.test/uncached.stl").with_cache(UNCACHED),
+        );
+        assert!(request.cache_disabled());
+
+        let (done, stale) = client.preflight(&[request.clone()]);
+        assert!(done.is_empty());
+        assert_eq!(stale[0]["cache"], UNCACHED);
+
+        let uncached = uncached_identities(&stale);
+        let mut pending: HashMap<String, ThumbRequest> =
+            [(request.identity().into_owned(), request)].into_iter().collect();
+        let mut final_result = ResultData::new("https://media.test/uncached.stl".to_string());
+        final_result.status = status::SUCCESS.to_string();
+        client.finish_stream_result(
+            serde_json::to_value(final_result).unwrap(),
+            &mut pending,
+            &request_url,
+            &uncached,
+        );
+        assert_eq!(client.caches()[0].len(), 0);
     }
 }

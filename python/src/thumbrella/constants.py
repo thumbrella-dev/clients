@@ -1,6 +1,14 @@
 """Status and type constants, string-based for cross-language portability."""
 
 
+#: Sentinel ``cache`` value that disables caching for a request.
+#:
+#: Pass it as the request mapping's ``cache`` field to bypass both the
+#: client's internal caches and the server cache.  The value is sent to the
+#: server unchanged.
+UNCACHED = "uncached"
+
+
 DEFAULT_BASE = "https://cloud.thumbrella.dev"
 
 MAX_BACKOFF = 60.0

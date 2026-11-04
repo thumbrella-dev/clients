@@ -2,6 +2,8 @@
 
 ## Development 
 
+- Support "cache: uncached" on requests
+
 ## 2.3.0 - 2026/11/03
 
 - Browser `tbr-thumb` starts with a best precached image  /typescript

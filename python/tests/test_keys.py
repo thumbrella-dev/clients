@@ -6,7 +6,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from thumbrella import Client, MemoryCache
 from thumbrella.cache import media_from_caches, put_all_caches
-from thumbrella.client import _result_from_server
+from thumbrella.client import (
+    _preflight_urls,
+    _result_from_server,
+    _uncached_identities,
+)
+from thumbrella.constants import UNCACHED
 from thumbrella.result import Media
 
 
@@ -36,6 +41,33 @@ class KeyTests(unittest.TestCase):
         self.assertIsNotNone(media_from_caches([cache], url, "avatar/1"))
         self.assertIsNone(media_from_caches([cache], url, "avatar/2"))
         self.assertIsNone(media_from_caches([cache], url))
+
+    def test_caller_cache_is_forwarded_and_uncached_bypasses_the_client_cache(self):
+        url = "https://media.test/model.obj"
+
+        # A caller-supplied token is forwarded unchanged.
+        done, stale = _preflight_urls([{"url": url, "cache": "abc:def"}], [])
+        self.assertFalse(done)
+        self.assertEqual(stale[0]["cache"], "abc:def")
+
+        # "uncached" ignores even a fresh internal entry and is sent verbatim.
+        cache = MemoryCache()
+        put_all_caches([cache], url, Media({"url": url, "cache": "ffff:AAA"}))
+        done, stale = _preflight_urls([{"url": url, "cache": UNCACHED}], [cache])
+        self.assertFalse(done)
+        self.assertEqual(stale[0]["cache"], UNCACHED)
+
+        # A result for an uncached request is not stored.
+        uncached = _uncached_identities(stale)
+        self.assertIn(url, uncached)
+        fresh = MemoryCache()
+        _result_from_server(
+            {"url": url, "status": "success", "media": {"url": url, "cache": ""}},
+            caches=[fresh], server_key="server",
+            request_url="https://server.test/batch",
+            cache_enabled=False,
+        )
+        self.assertEqual(len(fresh), 0)
 
     def test_batch_and_stream_send_keys_and_echo_them(self):
         seen = []

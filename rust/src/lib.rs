@@ -19,4 +19,6 @@ pub mod blocking;
 
 pub use cache::{Cache, MemoryCache, media_from_caches, put_all_caches, remove_from_caches};
 pub use client::Client;
-pub use types::{Error, Media, ResultData, ThumbRequest, ThumbRequestItem, Thumbnail, source, status};
+pub use types::{
+    Error, Media, ResultData, ThumbRequest, ThumbRequestItem, Thumbnail, UNCACHED, source, status,
+};

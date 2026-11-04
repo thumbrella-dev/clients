@@ -15,6 +15,7 @@ export {
   Status,
   Source,
   FileKind,
+  UNCACHED,
   ThumbError,
   VerifyError,
   ConnectionError,

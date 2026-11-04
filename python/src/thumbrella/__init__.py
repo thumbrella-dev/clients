@@ -42,7 +42,7 @@ independently, or included with thumbrella as a feature, installing
 from .client import Client, ThumbRequest
 from .result import EncodedJpeg, Media, Result
 from .cache import Cache, MemoryCache
-from .constants import Source, Status, FileKind
+from .constants import Source, Status, FileKind, UNCACHED
 from .errors import ThumbError, ConnectionError, TimeoutError, VerifyError, ServerError
 
 __all__ = [
@@ -56,6 +56,7 @@ __all__ = [
     "Source",
     "Status",
     "FileKind",
+    "UNCACHED",
     "ThumbError",
     "ConnectionError",
     "TimeoutError",

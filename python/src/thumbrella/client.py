@@ -16,15 +16,17 @@ from .cache import (
     put_all_caches,
     remove_from_caches,
 )
-from .constants import DEFAULT_BASE, HTTP_TIMEOUT, Source, Status, BATCH_MAX_ITEMS
+from .constants import DEFAULT_BASE, HTTP_TIMEOUT, Source, Status, BATCH_MAX_ITEMS, UNCACHED
 from .result import Result, EncodedJpeg
 from .errors import ConnectionError, TimeoutError, VerifyError, ThumbError
 from .http import parse_connect, requests_json, aio_ndjson
 
 #: A thumbnail request value: a plain URL string, or a mapping with ``url`` and
-#: an optional ``key``.  Any additional mapping entries are forwarded to the
-#: server as-is, so future per-request options need no client change.  Both
-#: forms are accepted everywhere requests are taken.
+#: an optional ``key`` and ``cache``.  ``cache`` is forwarded to the server
+#: unchanged; pass :data:`thumbrella.UNCACHED` to bypass caching.  Any
+#: additional mapping entries are forwarded to the server as-is, so future
+#: per-request options need no client change.  Both forms are accepted
+#: everywhere requests are taken.
 ThumbRequest = Union[str, Mapping[str, Any]]
 
 
@@ -226,6 +228,7 @@ class Client:
             # Split into server-sized chunks.
             for i in range(0, len(stale), BATCH_MAX_ITEMS):
                 chunk = stale[i:i + BATCH_MAX_ITEMS]
+                uncached = _uncached_identities(chunk)
                 try:
                     body = requests_json(
                         self.session, self.host_name, self.base_url, "POST", "/batch",
@@ -239,9 +242,14 @@ class Client:
                     return _fail_all(done, stale, urls, "unexpected server response")
 
                 for item in items:
+                    cache_enabled = (
+                        _data_identity(item) not in uncached
+                        and str(item.get("url") or "") not in uncached
+                    )
                     result = _result_from_server(
                         item, caches=self.caches, server_key=self.base_url,
                         request_url=self.base_url + "/batch",
+                        cache_enabled=cache_enabled,
                     )
                     _store_result(done, result)
 
@@ -305,6 +313,7 @@ class Client:
         # Split into server-sized chunks.
         for i in range(0, len(stale), BATCH_MAX_ITEMS):
             chunk = stale[i:i + BATCH_MAX_ITEMS]
+            uncached = _uncached_identities(chunk)
             pending: dict[str, tuple[str, str | None]] = {}
             for item in chunk:
                 item_url = str(item.get("url", ""))
@@ -321,9 +330,14 @@ class Client:
                         continue
                     if result_data.get("status") != Status.INTERMEDIATE:
                         _settle_pending(pending, result_data)
+                    cache_enabled = (
+                        _data_identity(result_data) not in uncached
+                        and str(result_data.get("url") or "") not in uncached
+                    )
                     result = _result_from_server(
                         result_data, caches=self.caches, server_key=self.base_url,
                         request_url=self.base_url + "/batch",
+                        cache_enabled=cache_enabled,
                     )
                     yield result
             except Exception as exc:
@@ -391,6 +405,32 @@ def _resolve_request(request: ThumbRequest) -> tuple[str, str | None, str]:
     return url, key, cache_identity(url, key)
 
 
+def _request_cache(request: ThumbRequest) -> str | None:
+    """The caller-supplied ``cache`` value, if any (passed through unaltered)."""
+    if isinstance(request, str):
+        return None
+    value = request.get("cache")
+    return value if isinstance(value, str) else None
+
+
+def _is_uncached(cache: str | None) -> bool:
+    """True when *cache* is the ``uncached`` sentinel."""
+    return cache is not None and cache.strip().lower() == UNCACHED
+
+
+def _uncached_identities(items: Sequence[Mapping[str, Any]]) -> set[str]:
+    """Identities and URLs of wire items that requested ``uncached``."""
+    out: set[str] = set()
+    for item in items:
+        if not _is_uncached(item.get("cache") if isinstance(item.get("cache"), str) else None):
+            continue
+        url = str(item.get("url") or "")
+        key = item.get("key")
+        out.add(cache_identity(url, key if isinstance(key, str) else None))
+        out.add(url)
+    return out
+
+
 def _wire_item(request: ThumbRequest, cache: str | None = None) -> dict[str, Any]:
     """Build the server request item, preserving forward-compatible fields."""
     if isinstance(request, str):
@@ -448,6 +488,7 @@ def _result_from_server(
     caches: Sequence[Cache],
     server_key: str,
     request_url: str,
+    cache_enabled: bool = True,
 ) -> Result:
     """Build a :class:`Result` from a server response item, with identity sharing.
 
@@ -463,7 +504,7 @@ def _result_from_server(
     placeholder = item.get("placeholder")
 
     cached_media = (
-        media_from_caches(caches, url, key) if source == Source.NOT_MODIFIED else None
+        media_from_caches(caches, url, key) if cache_enabled and source == Source.NOT_MODIFIED else None
     )
     if source == Source.NOT_MODIFIED:
         result = Result(item, media=cached_media) if cached_media is not None else Result(item)
@@ -478,7 +519,7 @@ def _result_from_server(
         result.pin = urljoin(request_url, result.pin)
 
     if source == Source.NOT_MODIFIED:
-        if cached_media is not None:
+        if cache_enabled and cached_media is not None:
             server_media = item.get("media")
             renewed_cache = server_media.get("cache") if isinstance(server_media, dict) else None
             if isinstance(renewed_cache, str):
@@ -487,7 +528,7 @@ def _result_from_server(
                 remove_from_caches(caches, result.url, key)
             else:
                 put_all_caches(caches, result.url, cached_media, key)
-    elif result.status != Status.INTERMEDIATE:
+    elif cache_enabled and result.status != Status.INTERMEDIATE:
         # Intermediates are progress frames, not answers. Caching one would
         # let a placeholder replace a final result.
         put_all_caches(caches, result.url, result.media, key)
@@ -552,6 +593,12 @@ def _preflight_urls(
             _store_result(done, Result.client_fail(url, "invalid URL", identity))
             continue
 
+        caller_cache = _request_cache(request)
+        # "uncached" opts out of the client cache entirely; still send it.
+        if _is_uncached(caller_cache):
+            stale.append(_wire_item(request))
+            continue
+
         media = media_from_caches(caches, url, key)
         if media is not None and media.is_fresh():
             data = {
@@ -564,9 +611,13 @@ def _preflight_urls(
             done[url] = done[identity]
             continue
 
-        # Stale, build the server request. Include the cache token from any
-        # cached media so the server can do a conditional revalidation, and
-        # forward any additional per-request fields unchanged.
-        stale.append(_wire_item(request, media.cache if media is not None and media.cache else None))
+        # Stale, build the server request.  A caller-supplied cache token wins
+        # over the token from cached media; otherwise include the cached token
+        # so the server can revalidate conditionally.
+        override = (
+            None if caller_cache is not None
+            else (media.cache if media is not None and media.cache else None)
+        )
+        stale.append(_wire_item(request, override))
 
     return done, stale
