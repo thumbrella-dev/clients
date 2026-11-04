@@ -40,6 +40,17 @@ fn cache_key(url: &str) -> Cow<'_, str> {
     Cow::Owned(format!("{}://{}{}", scheme.to_ascii_lowercase(), host.to_ascii_lowercase(), path))
 }
 
+/// Effective cache identity for a request.
+///
+/// A caller-supplied key is used verbatim; otherwise the URL's canonical form
+/// is used. This mirrors how the server addresses cache entries.
+pub(crate) fn request_identity<'a>(url: &'a str, key: Option<&'a str>) -> Cow<'a, str> {
+    match key {
+        Some(key) if !key.is_empty() => Cow::Borrowed(key),
+        _ => cache_key(url),
+    }
+}
+
 /// Abstract base for result caches, stores [`Media`] entries under opaque keys.
 pub trait Cache: Send + Sync {
     /// Get media stored under `key`.

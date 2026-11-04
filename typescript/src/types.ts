@@ -43,6 +43,38 @@ export const FileKind = {
 } as const;
 export type FileKind = (typeof FileKind)[keyof typeof FileKind];
 
+//  Request values
+
+/**
+ * Object form of a thumbnail request.
+ *
+ * The `url` is the source to thumbnail.  The optional `key` overrides the
+ * cache identity for that request, which is useful when the same object is
+ * addressed by multiple, changing URLs (signed storage links, for example).
+ *
+ * Any other properties are passed through to the server as-is.  This keeps
+ * the client forward compatible as new per-request options are added.
+ */
+export interface ThumbRequestItem {
+  url: string;
+  key?: string;
+  [field: string]: unknown;
+}
+
+/**
+ * A thumbnail request: a plain URL string, or an object carrying a URL and an
+ * optional cache key.
+ *
+ * Both forms are accepted everywhere the client takes request values, so
+ * existing string-based code keeps working:
+ *
+ * ```ts
+ * await tbr.batch(["https://example.com/a.jpg"]);
+ * await tbr.batch([{ url: "https://example.com/a.jpg", key: "avatar/1" }]);
+ * ```
+ */
+export type ThumbRequest = string | ThumbRequestItem;
+
 //  EncodedJpeg 
 
 /**
@@ -148,7 +180,7 @@ export class Media {
    * Informational URL reported by the server.
    *
    * This is not the request identity and must not be used as a cache key.
-   * Use {@link Result.url} for identity and caching.
+   * Use {@link Result.key} for identity and caching.
    */
   url: string;
   thumbnail: EncodedJpeg;
@@ -281,6 +313,14 @@ const _FAILED_B64 =
  * See https://thumbrella.dev/docs/result for full documentation.
  */
 export class Result {
+  /**
+   * Effective cache identity for this result.
+   *
+   * This is the caller-supplied request key when one was given, otherwise the
+   * canonical source URL.  It is the value used for client caching; `url`
+   * remains the exact URL that was requested.
+   */
+  key: string;
   url: string;
   status: string;
   message: string | null;
@@ -294,6 +334,7 @@ export class Result {
   raw: Record<string, unknown>;
 
   constructor(data: Record<string, unknown>) {
+    this.key = (data.key as string) ?? "";
     this.url = (data.url as string) ?? "";
     this.status = (data.status as string) ?? Status.UNAVAILABLE;
     this.message = (data.message as string) ?? null;
@@ -308,8 +349,9 @@ export class Result {
     this.media = mediaRaw ? new Media(mediaRaw) : null;
   }
 
-  static clientFail(url: string, message: string): Result {
+  static clientFail(url: string, message: string, key?: string): Result {
     return new Result({
+      key: key ?? "",
       url,
       status: Status.UNAVAILABLE,
       source: Source.CLIENT,

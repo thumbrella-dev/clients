@@ -4,6 +4,7 @@ export {
   mediaFromCaches,
   putAllCaches,
   removeFromCaches,
+  requestIdentity,
   createMemoryCache,
 } from "./cache.js";
 export type { Cache, CacheBackend, ClientCache } from "./cache.js";
@@ -19,3 +20,4 @@ export {
   ConnectionError,
   TimeoutError,
 } from "./types.js";
+export type { ThumbRequest, ThumbRequestItem } from "./types.js";

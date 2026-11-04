@@ -39,7 +39,7 @@ independently, or included with thumbrella as a feature, installing
 
 """
 
-from .client import Client
+from .client import Client, ThumbRequest
 from .result import EncodedJpeg, Media, Result
 from .cache import Cache, MemoryCache
 from .constants import Source, Status, FileKind
@@ -47,6 +47,7 @@ from .errors import ThumbError, ConnectionError, TimeoutError, VerifyError, Serv
 
 __all__ = [
     "Client",
+    "ThumbRequest",
     "Media",
     "EncodedJpeg",
     "Result",

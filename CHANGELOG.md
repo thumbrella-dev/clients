@@ -2,12 +2,16 @@
 
 ## Development 
 
-- Browser `tbr-thumb` starts with a best initial image  /typescript
+## 2.3.0 - 2026/11/03
+
+- Browser `tbr-thumb` starts with a best precached image  /typescript
 - Internal caches updated with server "not modified" results  /typescript
 - Remove semi-internal browser `BatchedClient`  /typescript
 - `tbrSetup` properly registers browser side caches  /typescript
 - Simplify urls for cache lookups  /typescript /python /rust
 - Add Client.connect attribute  /typescript /python /rust
+- Allow optionally defined key for each url request  /typescript /python /rust
+- Add Result.key attribute  /typescript /python /rust
 
 ## 2.0.0 - 2026/10/11
 

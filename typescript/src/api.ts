@@ -1,7 +1,14 @@
 import type { ClientCache } from "./cache.js";
 import { notifyRequest } from "./requests.js";
-import { MemoryCache, mediaFromCaches, putAllCaches, removeFromCaches } from "./cache.js";
+import {
+  MemoryCache,
+  mediaFromCaches,
+  putAllCaches,
+  removeFromCaches,
+  requestIdentity,
+} from "./cache.js";
 import { CLIENT_MAJOR_MINOR } from "./version.js";
+import type { ThumbRequest } from "./types.js";
 import {
   Result,
   Media,
@@ -235,8 +242,8 @@ export class Client {
    *
    * @throws {ThumbError} if the server returned an error for this URL.
    */
-  async thumb(url: string): Promise<Result> {
-    const [result] = await this.batch([url]);
+  async thumb(request: ThumbRequest): Promise<Result> {
+    const [result] = await this.batch([request]);
     return result.verify();
   }
 
@@ -254,14 +261,20 @@ export class Client {
    *
    * See https://thumbrella.dev/docs/api/batch.html for server details.
    */
-  async batch(urls: string[]): Promise<Result[]> {
+  async batch(requests: readonly ThumbRequest[]): Promise<Result[]> {
+    const resolved = requests.map(resolveRequest);
     const collected = new Map<string, Result>();
-    for await (const r of this.stream(urls)) {
+    for await (const r of this.stream(requests)) {
       if (r.status !== Status.INTERMEDIATE) {
+        collected.set(resultIdentity(r), r);
+        // Older servers omit `key`; remember the echoed URL as a fallback.
         collected.set(r.url, r);
       }
     }
-    return urls.map((u) => collected.get(u) ?? Result.clientFail(u, "no result"));
+    return resolved.map((r) =>
+      collected.get(r.identity) ?? collected.get(r.url)
+        ?? Result.clientFail(r.url, "no result", r.identity)
+    );
   }
 
   /**
@@ -281,20 +294,21 @@ export class Client {
    *
    * See https://thumbrella.dev/docs/api/batch.html for server details.
    */
-  async *stream(urls: string[]): AsyncGenerator<Result> {
+  async *stream(requests: readonly ThumbRequest[]): AsyncGenerator<Result> {
     // Split into server-sized chunks.
-    for (let i = 0; i < urls.length; i += BATCH_MAX_ITEMS) {
-      const chunk = urls.slice(i, i + BATCH_MAX_ITEMS);
+    for (let i = 0; i < requests.length; i += BATCH_MAX_ITEMS) {
+      const chunk = requests.slice(i, i + BATCH_MAX_ITEMS);
       yield* this._streamChunk(chunk);
     }
   }
 
-  /** Internal: stream a single chunk of at most BATCH_MAX_ITEMS URLs. */
-  private async *_streamChunk(urls: string[]): AsyncGenerator<Result> {
-    const { done, stale } = await preflightUrls(urls, this.caches);
+  /** Internal: stream a single chunk of at most BATCH_MAX_ITEMS requests. */
+  private async *_streamChunk(requests: readonly ThumbRequest[]): AsyncGenerator<Result> {
+    const resolved = requests.map(resolveRequest);
+    const { done, stale } = await preflightUrls(resolved, this.caches);
 
-    for (const url of urls) {
-      const r = done.get(url);
+    for (const request of resolved) {
+      const r = done.get(request.identity);
       if (r) yield r;
     }
 
@@ -303,11 +317,12 @@ export class Client {
     const host = resolveHost(this.baseUrl);
     checkBackoff(host);
 
-    const pending = new Set(stale.map((s) => s.url));
-    const body = JSON.stringify({ items: stale });
+    const pending = new Map<string, ResolvedRequest>();
+    for (const item of stale) pending.set(item.request.identity, item.request);
+    const body = JSON.stringify({ items: stale.map((item) => item.wire) });
     const url = `${this.baseUrl}/batch`;
     try {
-      notifyRequest(this, stale.map((item) => item.url));
+      notifyRequest(this, stale.map((item) => item.request.url));
       const resp = await fetch(url, {
         method: "POST",
         headers: {
@@ -321,8 +336,8 @@ export class Client {
       recordBackoff(host, resp.status === 429 || resp.status === 503);
 
       if (!resp.ok || !resp.body) {
-        for (const url of pending) {
-          yield Result.clientFail(url, `stream error (${resp.status})`);
+        for (const request of pending.values()) {
+          yield Result.clientFail(request.url, `stream error (${resp.status})`, request.identity);
         }
         return;
       }
@@ -344,10 +359,12 @@ export class Client {
           if (!resultData) continue;
           const result = await resultFromServer(resultData, this.caches, this.baseUrl, url);
           const itemUrl = resultData.url as string | undefined;
-          // Only a terminal result completes a URL. Intermediate results must
-          // not remove the URL from `pending`, otherwise an interrupted stream
+          // Only a terminal result completes a request. Intermediate results
+          // must not remove it from `pending`, otherwise an interrupted stream
           // leaves that element stuck in the loading state forever.
-          if (itemUrl && resultData.status !== Status.INTERMEDIATE) pending.delete(itemUrl);
+          if (itemUrl && resultData.status !== Status.INTERMEDIATE) {
+            settlePending(pending, result, itemUrl);
+          }
           yield result;
         }
       }
@@ -356,19 +373,25 @@ export class Client {
         if (resultData) {
           const result = await resultFromServer(resultData, this.caches, this.baseUrl, url);
           const itemUrl = resultData.url as string | undefined;
-          if (itemUrl && resultData.status !== Status.INTERMEDIATE) pending.delete(itemUrl);
+          if (itemUrl && resultData.status !== Status.INTERMEDIATE) {
+            settlePending(pending, result, itemUrl);
+          }
           yield result;
         }
       }
     } catch (error) {
-      for (const url of pending) {
-        yield Result.clientFail(url, `stream connection lost: ${error}`);
+      for (const request of pending.values()) {
+        yield Result.clientFail(
+          request.url,
+          `stream connection lost: ${error}`,
+          request.identity,
+        );
       }
       pending.clear();
     }
 
-    for (const url of pending) {
-      yield Result.clientFail(url, "stream connection lost");
+    for (const request of pending.values()) {
+      yield Result.clientFail(request.url, "stream connection lost", request.identity);
     }
   }
 
@@ -453,6 +476,76 @@ interface ConnectConfig {
   source: ConnectSource;
 }
 
+/** A request value flattened into the URL, optional key, and identity. */
+interface ResolvedRequest {
+  url: string;
+  key?: string;
+  identity: string;
+  /** Base wire item, including any future per-request fields. */
+  wire: WireItem;
+}
+
+/** Wire shape accepted by the server's `/batch` items array. */
+interface WireItem {
+  url: string;
+  key?: string;
+  cache?: string;
+  [field: string]: unknown;
+}
+
+/**
+ * Flatten a public request value.
+ *
+ * A caller-supplied key is used verbatim as the cache identity; otherwise the
+ * canonical URL is used, matching the server.  Unknown fields are retained on
+ * the wire item so future server options need no client change.
+ */
+function resolveRequest(request: ThumbRequest): ResolvedRequest {
+  if (typeof request === "string") {
+    return {
+      url: request,
+      identity: requestIdentity(request),
+      wire: { url: request },
+    };
+  }
+  const { key: rawKey, ...rest } = request;
+  const key = rawKey?.trim() || undefined;
+  const wire: WireItem = { ...rest, url: request.url };
+  if (key) wire.key = key;
+  else delete wire.key;
+  return {
+    url: request.url,
+    key,
+    identity: requestIdentity(request.url, key),
+    wire,
+  };
+}
+
+/** Effective identity of a result, tolerating older servers without `key`. */
+function resultIdentity(result: Result): string {
+  return result.key || result.url;
+}
+
+/**
+ * Remove a completed request from the pending map.
+ *
+ * New servers echo the request key, so identity matching is exact.  Older
+ * servers omit it, so fall back to the echoed URL.
+ */
+function settlePending(
+  pending: Map<string, ResolvedRequest>,
+  result: Result,
+  itemUrl: string,
+): void {
+  if (pending.delete(resultIdentity(result))) return;
+  for (const [identity, request] of pending) {
+    if (request.url === itemUrl) {
+      pending.delete(identity);
+      return;
+    }
+  }
+}
+
 /**
  * Read the ambient connect string from the environment.
  *
@@ -502,32 +595,38 @@ function isAbsolutePath(s: string): boolean {
 }
 
 async function preflightUrls(
-  urls: string[],
+  requests: readonly ResolvedRequest[],
   caches: readonly ClientCache[],
-): Promise<{ done: Map<string, Result>; stale: { url: string; cache?: string }[] }> {
+): Promise<{
+  done: Map<string, Result>;
+  stale: { request: ResolvedRequest; wire: WireItem }[];
+}> {
   const done = new Map<string, Result>();
-  const stale: { url: string; cache?: string }[] = [];
+  const stale: { request: ResolvedRequest; wire: WireItem }[] = [];
 
-  for (const url of urls) {
-    if (!url || (!url.includes("://") && !isAbsolutePath(url))) {
-      done.set(url, Result.clientFail(url, "invalid URL"));
+  for (const request of requests) {
+    if (!request.url || (!request.url.includes("://") && !isAbsolutePath(request.url))) {
+      done.set(request.identity, Result.clientFail(request.url, "invalid URL", request.identity));
       continue;
     }
 
-    const media = await mediaFromCaches(caches, url);
+    const media = await mediaFromCaches(caches, request.url, request.key);
     if (media?.isFresh()) {
-      done.set(
-        url,
-        new Result({ url, status: Status.SUCCESS, source: Source.CACHE }),
-      );
-      done.get(url)!.media = media;
+      const result = new Result({
+        key: request.identity,
+        url: request.url,
+        status: Status.SUCCESS,
+        source: Source.CACHE,
+      });
+      result.media = media;
+      done.set(request.identity, result);
       continue;
     }
 
-    // Stale — must go to server.
-    const item: { url: string; cache?: string } = { url };
-    if (media?.cache) item.cache = media.cache;
-    stale.push(item);
+    // Stale - must go to server.  Future per-request fields ride along.
+    const wire: WireItem = { ...request.wire };
+    if (media?.cache) wire.cache = media.cache;
+    stale.push({ request, wire });
   }
 
   return { done, stale };
@@ -584,18 +683,19 @@ async function resultFromServer(
   }
   const source = item.source as string | undefined;
   const placeholder = item.placeholder as string | undefined;
+  const key = r.key || undefined;
 
   if (source === Source.NOT_MODIFIED) {
     const url = (item.url as string) ?? "";
-    const media = await mediaFromCaches(caches, url);
+    const media = await mediaFromCaches(caches, url, key);
     if (media) {
       const renewedCache = (item.media as Record<string, unknown> | undefined)?.cache;
       if (typeof renewedCache === "string") media.cache = renewedCache;
       r.media = media;
       if (renewedCache === "") {
-        await removeFromCaches(caches, r.url);
+        await removeFromCaches(caches, r.url, key);
       } else {
-        await putAllCaches(caches, r.url, r.media);
+        await putAllCaches(caches, r.url, r.media, key);
       }
     }
     return r;
@@ -614,7 +714,7 @@ async function resultFromServer(
   if (r.status !== Status.INTERMEDIATE) {
     // Intermediates are progress frames, not answers.  Caching one would let a
     // placeholder replace a final result.
-    await putAllCaches(caches, r.url, r.media);
+    await putAllCaches(caches, r.url, r.media, key);
   }
   return r;
 }

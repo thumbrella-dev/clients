@@ -29,6 +29,16 @@ function cacheKey(raw: string): string {
 }
 
 /**
+ * Effective cache identity for a request.
+ *
+ * A caller-supplied key is used verbatim; otherwise the URL's canonical form
+ * is used.  This mirrors how the server addresses cache entries.
+ */
+export function requestIdentity(url: string, key?: string): string {
+  return key ? key : cacheKey(url);
+}
+
+/**
  * Low-level byte cache backend.
  *
  * Backends store opaque serialized media records (Uint8Array). The client
@@ -242,11 +252,12 @@ export class MemoryCache implements Cache {
 export async function mediaFromCaches(
   caches: readonly ClientCache[],
   url: string,
+  key?: string,
 ): Promise<Media | undefined> {
-  const key = cacheKey(url);
+  const identity = requestIdentity(url, key);
   let stale: Media | undefined;
   for (const cache of caches) {
-    const media = await getCachedMedia(cache, key);
+    const media = await getCachedMedia(cache, identity);
     if (!media) continue;
     if (media.isFresh()) return media;
     stale ??= media;
@@ -259,16 +270,17 @@ export async function putAllCaches(
   caches: readonly ClientCache[],
   url: string,
   media: Media | null,
+  key?: string,
 ): Promise<void> {
   if (!media) return;
-  const key = cacheKey(url);
+  const identity = requestIdentity(url, key);
   for (const cache of caches) {
     if (isMediaCache(cache)) {
-      cache.put(key, media);
+      cache.put(identity, media);
       continue;
     }
     try {
-      await cache.set(key, encodeMedia(media, key));
+      await cache.set(identity, encodeMedia(media, identity));
     } catch (error) {
       if (error instanceof DOMException || error instanceof RangeError) {
         console.warn("Thumbrella cache write failed", error);
@@ -283,14 +295,15 @@ export async function putAllCaches(
 export async function removeFromCaches(
   caches: readonly ClientCache[],
   url: string,
+  key?: string,
 ): Promise<void> {
-  const key = cacheKey(url);
+  const identity = requestIdentity(url, key);
   for (const cache of caches) {
     try {
       if (isMediaCache(cache)) {
-        cache.remove(key);
+        cache.remove(identity);
       } else if (cache.remove) {
-        await cache.remove(key);
+        await cache.remove(identity);
       }
     } catch (error) {
       if (error instanceof DOMException) {

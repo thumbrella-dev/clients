@@ -87,6 +87,11 @@ async fn main() -> Result<(), thumbrella::Error> {
         println!("{} {}", result.url, result.status);
     }
 
+    // Requests can carry an explicit cache key. Plain strings still work.
+    let keyed = thumbrella::ThumbRequest::keyed("https://example.com/a.jpg?sig=1", "avatar/1");
+    let result = tbr.thumb(keyed).await?;
+    println!("{} {}", result.key, result.status);
+
     Ok(())
 }
 ```
@@ -96,6 +101,7 @@ async fn main() -> Result<(), thumbrella::Error> {
 ### ResultData
 
 ```rust
+result.key           // String - effective cache identity (request key or canonical URL)
 result.url           // String - the requested URL
 result.status        // String - "success" | "failed" | "overloaded" | "intermediate" | ...
 result.source        // Option<String> - "render" | "cache" | "fallback" | "placeholder" | ...
@@ -123,7 +129,7 @@ for more details.
 ### Media
 
 ```rust
-media.url          // String - simplified URL; use result.url for identity
+media.url          // String - simplified URL; use result.key for identity
 media.mime         // String - "image/jpeg" | "application/pdf" | ...
 media.kind         // String - "image" | "video" | "document" | "geometry" | ...
 media.extension    // String - canonical extension without a dot

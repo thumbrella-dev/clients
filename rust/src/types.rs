@@ -2,6 +2,7 @@
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 
@@ -277,10 +278,146 @@ impl Media {
 
 //  Result
 
+/// A thumbnail request: a bare URL, or a URL with an optional cache key.
+///
+/// Both forms are accepted everywhere the client takes request values, so
+/// existing string-based code keeps working.  A `key` overrides the cache
+/// identity for that request, which is useful when one object is addressed by
+/// several changing URLs (signed storage links, for example).
+///
+/// ```
+/// # use thumbrella_client::ThumbRequest;
+/// let plain = ThumbRequest::from("https://example.com/a.jpg");
+/// let keyed = ThumbRequest::keyed("https://example.com/a.jpg?sig=1", "avatar/1");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ThumbRequest {
+    /// Bare URL string.
+    Url(String),
+    /// Object form with a URL and optional cache key.
+    Item(ThumbRequestItem),
+}
+
+/// Object form of a thumbnail request.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ThumbRequestItem {
+    /// Source URL to thumbnail.
+    pub url: String,
+    /// Optional cache identity override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// Additional per-request fields, passed through to the server verbatim.
+    ///
+    /// This keeps the client forward compatible as new per-request options are
+    /// added.  Servers ignore fields they do not understand.
+    #[serde(flatten, default)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+impl ThumbRequestItem {
+    /// A plain item request for `url`.
+    pub fn new(url: impl Into<String>) -> Self {
+        Self {
+            url: url.into(),
+            ..Self::default()
+        }
+    }
+
+    /// Set the cache identity override.
+    pub fn with_key(mut self, key: impl Into<String>) -> Self {
+        self.key = Some(key.into());
+        self
+    }
+
+    /// Add a per-request option that is forwarded to the server.
+    pub fn with_option(mut self, name: impl Into<String>, value: impl Into<serde_json::Value>) -> Self {
+        self.extra.insert(name.into(), value.into());
+        self
+    }
+}
+
+impl ThumbRequest {
+    /// A bare URL request.
+    pub fn url(url: impl Into<String>) -> Self {
+        Self::Url(url.into())
+    }
+
+    /// An object-form request without a cache key.
+    pub fn item(url: impl Into<String>) -> Self {
+        Self::Item(ThumbRequestItem::new(url))
+    }
+
+    /// A request with an explicit cache key.
+    pub fn keyed(url: impl Into<String>, key: impl Into<String>) -> Self {
+        Self::Item(ThumbRequestItem::new(url).with_key(key))
+    }
+
+    /// The source URL.
+    pub fn as_url(&self) -> &str {
+        match self {
+            Self::Url(url) => url,
+            Self::Item(item) => &item.url,
+        }
+    }
+
+    /// The caller-supplied cache key, if any.
+    pub fn key(&self) -> Option<&str> {
+        match self {
+            Self::Url(_) => None,
+            Self::Item(item) => item.key.as_deref().filter(|k| !k.is_empty()),
+        }
+    }
+
+    /// Effective cache identity: the caller key, otherwise the canonical URL.
+    pub fn identity(&self) -> Cow<'_, str> {
+        crate::cache::request_identity(self.as_url(), self.key())
+    }
+}
+
+impl From<String> for ThumbRequest {
+    fn from(url: String) -> Self {
+        Self::Url(url)
+    }
+}
+
+impl From<&str> for ThumbRequest {
+    fn from(url: &str) -> Self {
+        Self::Url(url.to_string())
+    }
+}
+
+impl From<&String> for ThumbRequest {
+    fn from(url: &String) -> Self {
+        Self::Url(url.clone())
+    }
+}
+
+impl From<&&str> for ThumbRequest {
+    fn from(url: &&str) -> Self {
+        Self::Url((*url).to_string())
+    }
+}
+
+impl From<ThumbRequestItem> for ThumbRequest {
+    fn from(item: ThumbRequestItem) -> Self {
+        Self::Item(item)
+    }
+}
+
+impl From<(&str, &str)> for ThumbRequest {
+    fn from((url, key): (&str, &str)) -> Self {
+        Self::keyed(url, key)
+    }
+}
+
 /// Result for every URL.
 ///
 /// The result describes the operation for every thumbnail URL. It handles both
 /// successes and failures.
+///
+/// The `key` field holds the effective cache identity: the caller-supplied
+/// request key when present, otherwise the canonical URL.
 ///
 /// The `status` field determines how this result should be handled. All
 /// statuses will still include a thumbnail image, even for failures.
@@ -302,6 +439,10 @@ impl Media {
 /// See <https://thumbrella.dev/docs/result> for full documentation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResultData {
+    /// Effective cache identity: the caller-supplied key when present,
+    /// otherwise the canonical URL.  This is the client cache key.
+    #[serde(default)]
+    pub key: String,
     pub url: String,
     #[serde(default)]
     pub status: String,
@@ -345,6 +486,7 @@ impl ResultData {
     pub fn new(url: String) -> Self {
         let media = Media::failed(&url);
         Self {
+            key: url.clone(),
             url,
             status: status::UNAVAILABLE.to_string(),
             duration: 0.0,
@@ -360,6 +502,11 @@ impl ResultData {
 
     pub fn is_fresh(&self) -> bool {
         self.media.is_fresh()
+    }
+
+    /// Effective cache identity, tolerating older servers without `key`.
+    pub fn identity(&self) -> &str {
+        if self.key.is_empty() { &self.url } else { &self.key }
     }
 
     pub fn is_success(&self) -> bool {

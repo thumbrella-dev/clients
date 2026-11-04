@@ -64,6 +64,9 @@ async def stream_example():
         print(r.url, r.status)
 
 asyncio.run(stream_example())
+
+# Requests can carry an explicit cache key. Plain strings still work.
+result = tbr.thumb({"url": "https://example.com/a.png?sig=1", "key": "avatar/1"})
 ```
 
 ## How It Works
@@ -99,6 +102,7 @@ configuration.
 ### Result
 
 ```python
+result.key         # str — effective cache identity (request key or canonical URL)
 result.url         # str — the requested URL
 result.status      # "success" | "failed" | "overloaded" | "intermediate" | ...
 result.source      # "render" | "cache" | "fallback" | "placeholder" | ...
@@ -118,7 +122,7 @@ https://thumbrella.dev/docs/client/#result
 ### Media
 
 ```python
-media.url          # str — simplified URL; use result.url for identity
+media.url          # str — simplified URL; use result.key for identity
 media.mime         # "image/jpeg" | "application/pdf" | ...
 media.kind         # "image" | "video" | "document" | "vector" | "geometry" | ...
 media.file_size    # int — original file size in bytes

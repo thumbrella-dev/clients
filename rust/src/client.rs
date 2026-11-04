@@ -4,7 +4,7 @@ use async_stream::stream;
 use futures_core::Stream;
 use futures_util::StreamExt;
 use reqwest::Client as HttpClient;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -23,6 +23,64 @@ fn parse_server_result(
     let renewed_cache =
         item.get("media").and_then(|m| m.get("cache")).and_then(|c| c.as_str()).map(str::to_owned);
     Ok((serde_json::from_value(item)?, renewed_cache))
+}
+
+/// Build a client-side failure result for a request.
+fn failed_result(request: &ThumbRequest, message: &str) -> ResultData {
+    let mut result = ResultData::new(request.as_url().to_string());
+    result.key = request.identity().into_owned();
+    result.set_client_error(message);
+    result
+}
+
+/// Recover the request value from a serialized stale request item.
+fn request_from_item(item: &serde_json::Value) -> ThumbRequest {
+    serde_json::from_value::<ThumbRequest>(item.clone())
+        .unwrap_or_else(|_| ThumbRequest::url(item.get("url").and_then(|v| v.as_str()).unwrap_or("")))
+}
+
+/// Build the wire item for a request, preserving forward-compatible fields.
+fn wire_item(request: &ThumbRequest, cache: Option<&str>) -> serde_json::Value {
+    let mut map = match serde_json::to_value(request) {
+        Ok(serde_json::Value::Object(map)) => map,
+        Ok(serde_json::Value::String(url)) => {
+            let mut map = serde_json::Map::new();
+            map.insert("url".into(), serde_json::Value::String(url));
+            map
+        }
+        _ => {
+            let mut map = serde_json::Map::new();
+            map.insert("url".into(), serde_json::Value::String(request.as_url().to_string()));
+            map
+        }
+    };
+    match request.key() {
+        Some(key) => {
+            map.insert("key".into(), serde_json::Value::String(key.to_string()));
+        }
+        None => {
+            map.remove("key");
+        }
+    }
+    if let Some(cache) = cache {
+        map.insert("cache".into(), serde_json::Value::String(cache.to_string()));
+    }
+    serde_json::Value::Object(map)
+}
+
+/// Remove a completed request from `pending`.
+///
+/// New servers echo the request key, so identity matching is exact. Older
+/// servers omit it, so fall back to the echoed URL.
+fn settle_pending(pending: &mut HashMap<String, ThumbRequest>, identity: &str, url: &str) {
+    if pending.remove(identity).is_some() {
+        return;
+    }
+    let matched =
+        pending.iter().find(|(_, request)| request.as_url() == url).map(|(key, _)| key.clone());
+    if let Some(key) = matched {
+        pending.remove(&key);
+    }
 }
 
 //  global backoff
@@ -345,18 +403,31 @@ impl Client {
     /// cases. If there is any problem generating a thumbnail this will result
     /// in an error, instead of a placeholder [`ResultData`].
     ///
+    /// Accepts a URL string or a [`ThumbRequest`]:
+    ///
+    /// ```no_run
+    /// # async fn example(tbr: thumbrella_client::Client) -> Result<(), thumbrella_client::Error> {
+    /// tbr.thumb("https://example.com/photo.jpg").await?;
+    /// tbr.thumb(thumbrella_client::ThumbRequest::keyed(
+    ///     "https://example.com/photo.jpg?sig=1", "avatar/1",
+    /// )).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
     /// Individual results can get the same effect by checking
     /// `result.status == status::SUCCESS`.
     ///
     /// This call waits for the result to complete before returning.
     ///
     /// See <https://thumbrella.dev/docs/api/batch.html> for server details.
-    pub async fn thumb(&self, url: &str) -> Result<ResultData, Error> {
-        let results = self.batch(&[url]).await?;
+    pub async fn thumb(&self, request: impl Into<ThumbRequest>) -> Result<ResultData, Error> {
+        let request = request.into();
+        let results = self.batch([request.clone()]).await?;
         let result = results.into_iter().next().unwrap();
         if result.status != status::SUCCESS {
             return Err(Error::Thumb {
-                url: url.to_string(),
+                url: request.as_url().to_string(),
                 status: result.status.clone(),
                 msg: result.message.clone(),
             });
@@ -366,8 +437,22 @@ impl Client {
 
     /// Generate multiple thumbnail results.
     ///
-    /// Generate a list of [`ResultData`] values for the given URLs. The
-    /// returned results are provided in the same order as the input URLs.
+    /// Generate a list of [`ResultData`] values for the given requests. The
+    /// returned results are provided in the same order as the input requests.
+    ///
+    /// Accepts anything convertible into [`ThumbRequest`], so plain URL slices
+    /// keep working:
+    ///
+    /// ```no_run
+    /// # async fn example(tbr: thumbrella_client::Client) -> Result<(), thumbrella_client::Error> {
+    /// tbr.batch(["https://example.com/a.jpg", "https://example.com/b.png"]).await?;
+    /// tbr.batch([
+    ///     thumbrella_client::ThumbRequest::keyed("https://example.com/a.jpg?sig=1", "avatar/1"),
+    ///     thumbrella_client::ThumbRequest::url("https://example.com/b.png"),
+    /// ]).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     ///
     /// This call waits for all results to complete before returning. For
     /// incremental results, see the [`stream`](Self::stream) method.
@@ -377,15 +462,16 @@ impl Client {
     /// placeholder thumbnails.
     ///
     /// See <https://thumbrella.dev/docs/api/batch.html> for server details.
-    pub async fn batch(&self, urls: &[&str]) -> Result<Vec<ResultData>, Error> {
-        let (mut done, stale_items) = self.preflight(urls);
+    pub async fn batch<I, R>(&self, requests: I) -> Result<Vec<ResultData>, Error>
+    where
+        I: IntoIterator<Item = R>,
+        R: Into<ThumbRequest>,
+    {
+        let requests: Vec<ThumbRequest> = requests.into_iter().map(Into::into).collect();
+        let (mut done, stale_items) = self.preflight(&requests);
 
         if stale_items.is_empty() {
-            return Ok(self.collect_results(urls, &done, |url| {
-                let mut r = ResultData::new(url.to_string());
-                r.set_client_error("no result");
-                r
-            }));
+            return Ok(self.collect_results(&requests, &done, "no result"));
         }
 
         self.backoff.check(&self.host)?;
@@ -402,11 +488,11 @@ impl Client {
             {
                 Ok(r) => r,
                 Err(e) => {
-                    return Ok(self.collect_results(urls, &done, |url| {
-                        let mut r = ResultData::new(url.to_string());
-                        r.set_client_error(&format!("server unreachable: {e}"));
-                        r
-                    }));
+                    return Ok(self.collect_results(
+                        &requests,
+                        &done,
+                        &format!("server unreachable: {e}"),
+                    ));
                 }
             };
 
@@ -414,11 +500,7 @@ impl Client {
             self.backoff.record(&self.host, code == 429 || code == 503);
 
             if !resp.status().is_success() {
-                return Ok(self.collect_results(urls, &done, |url| {
-                    let mut r = ResultData::new(url.to_string());
-                    r.set_client_error(&format!("server returned {code}"));
-                    r
-                }));
+                return Ok(self.collect_results(&requests, &done, &format!("server returned {code}")));
             }
 
             let request_url = resp.url().clone();
@@ -430,15 +512,12 @@ impl Client {
                     parse_server_result(value).map_err(|e| Error::Http(code, e.to_string()))?;
                 item.resolve_pin(&request_url).map_err(|e| Error::Http(code, e))?;
                 self.cache_server_result(&mut item, renewed_cache.as_deref());
-                done.insert(item.url.clone(), item);
+                done.insert(item.url.clone(), item.clone());
+                done.insert(item.identity().to_string(), item);
             }
         }
 
-        Ok(self.collect_results(urls, &done, |url| {
-            let mut r = ResultData::new(url.to_string());
-            r.set_client_error("no result from server");
-            r
-        }))
+        Ok(self.collect_results(&requests, &done, "no result from server"))
     }
 
     /// Stream thumbnail results as they complete.
@@ -451,11 +530,11 @@ impl Client {
     /// `result.status == status::INTERMEDIATE`.
     ///
     /// Individual failures are reported as results with a failure status, never
-    /// as stream errors. URLs are automatically split into server-sized chunks
-    /// to respect the server's per-request item limit.
+    /// as stream errors. Requests are automatically split into server-sized
+    /// chunks to respect the server's per-request item limit.
     ///
-    /// The returned stream borrows the client and the URL slice, so both must
-    /// outlive the stream.
+    /// Accepts anything convertible into [`ThumbRequest`], including plain URL
+    /// slices. The returned stream borrows only the client.
     ///
     /// ```no_run
     /// # async fn example() -> Result<(), thumbrella_client::Error> {
@@ -470,18 +549,22 @@ impl Client {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn stream<'a, 'u>(&'a self, urls: &'u [&'u str]) -> impl Stream<Item = ResultData> + 'u
+    pub fn stream<'a, I, R>(&'a self, requests: I) -> impl Stream<Item = ResultData> + 'a
     where
-        'a: 'u,
+        I: IntoIterator<Item = R> + 'a,
+        R: Into<ThumbRequest> + 'a,
     {
         stream! {
-            let urls: Vec<String> = urls.iter().map(|s| s.to_string()).collect();
-            let url_refs: Vec<&str> = urls.iter().map(String::as_str).collect();
-            let (done, stale) = self.preflight(&url_refs);
+            let requests: Vec<ThumbRequest> = requests.into_iter().map(Into::into).collect();
+            let (done, stale) = self.preflight(&requests);
 
             // Resolved (cached or invalid) results first, in input order.
-            for url in &urls {
-                if let Some(r) = done.get(url) {
+            for request in &requests {
+                let identity = request.identity();
+                if let Some(r) = done
+                    .get(identity.as_ref())
+                    .or_else(|| done.get(request.as_url()))
+                {
                     yield r.clone();
                 }
             }
@@ -490,16 +573,17 @@ impl Client {
                 // nothing left to do
             } else if let Err(e) = self.backoff.check(&self.host) {
                 for item in &stale {
-                    let url = item["url"].as_str().unwrap_or("").to_string();
-                    let mut r = ResultData::new(url);
-                    r.set_client_error(&e.to_string());
-                    yield r;
+                    let request = request_from_item(item);
+                    yield failed_result(&request, &e.to_string());
                 }
             } else {
                 for chunk in stale.chunks(BATCH_MAX_ITEMS) {
-                    let mut pending: HashSet<String> = chunk
+                    let mut pending: HashMap<String, ThumbRequest> = chunk
                         .iter()
-                        .map(|item| item["url"].as_str().unwrap_or("").to_string())
+                        .map(|item| {
+                            let request = request_from_item(item);
+                            (request.identity().into_owned(), request)
+                        })
                         .collect();
 
                     let body = serde_json::json!({ "items": chunk });
@@ -511,10 +595,8 @@ impl Client {
                     {
                         Ok(r) => r,
                         Err(e) => {
-                            for url in pending.drain() {
-                                let mut r = ResultData::new(url);
-                                r.set_client_error(&format!("server unreachable: {e}"));
-                                yield r;
+                            for request in pending.drain().map(|(_, request)| request) {
+                                yield failed_result(&request, &format!("server unreachable: {e}"));
                             }
                             continue;
                         }
@@ -524,10 +606,8 @@ impl Client {
                     self.backoff.record(&self.host, code == 429 || code == 503);
 
                     if !resp.status().is_success() {
-                        for url in pending.drain() {
-                            let mut r = ResultData::new(url);
-                            r.set_client_error(&format!("server returned {code}"));
-                            yield r;
+                        for request in pending.drain().map(|(_, request)| request) {
+                            yield failed_result(&request, &format!("server returned {code}"));
                         }
                         continue;
                     }
@@ -570,10 +650,8 @@ impl Client {
 
                     // Anything still pending never completed; the connection
                     // was interrupted before the server sent its result.
-                    for url in pending.drain() {
-                        let mut r = ResultData::new(url);
-                        r.set_client_error("stream connection lost");
-                        yield r;
+                    for request in pending.drain().map(|(_, request)| request) {
+                        yield failed_result(&request, "stream connection lost");
                     }
                 }
             }
@@ -582,54 +660,60 @@ impl Client {
 
     //  helpers
 
-    fn collect_results<F>(
+    fn collect_results(
         &self,
-        urls: &[&str],
+        requests: &[ThumbRequest],
         done: &HashMap<String, ResultData>,
-        fallback: F,
-    ) -> Vec<ResultData>
-    where
-        F: Fn(&str) -> ResultData,
-    {
-        urls.iter().map(|&u| done.get(u).cloned().unwrap_or_else(|| fallback(u))).collect()
+        message: &str,
+    ) -> Vec<ResultData> {
+        requests
+            .iter()
+            .map(|request| {
+                let identity = request.identity();
+                done.get(identity.as_ref())
+                    .or_else(|| done.get(request.as_url()))
+                    .cloned()
+                    .unwrap_or_else(|| failed_result(request, message))
+            })
+            .collect()
     }
 
-    /// Check caches and validate URLs, without making any server calls.
+    /// Check caches and validate requests, without making any server calls.
     ///
-    /// Returns `(done, stale)`: `done` maps each URL resolved locally (invalid
-    /// URL or fresh cache entry) to its result, and `stale` holds the request
-    /// items that still need a server call.
-    fn preflight(&self, urls: &[&str]) -> (HashMap<String, ResultData>, Vec<serde_json::Value>) {
+    /// Returns `(done, stale)`: `done` maps each cache identity resolved
+    /// locally (invalid URL or fresh cache entry) to its result, and `stale`
+    /// holds the request items that still need a server call.
+    fn preflight(
+        &self,
+        requests: &[ThumbRequest],
+    ) -> (HashMap<String, ResultData>, Vec<serde_json::Value>) {
         let mut done: HashMap<String, ResultData> = HashMap::new();
         let mut stale_items: Vec<serde_json::Value> = Vec::new();
 
-        for &url in urls {
+        for request in requests {
+            let url = request.as_url();
+            let identity = request.identity();
             if !url.contains("://") {
-                let mut r = ResultData::new(url.to_string());
-                r.set_client_error("invalid URL");
-                done.insert(url.to_string(), r);
+                done.insert(identity.into_owned(), failed_result(request, "invalid URL"));
                 continue;
             }
 
             // Check caches for a fresh entry.
-            let media = media_from_caches(&self.caches, url);
+            let media = media_from_caches(&self.caches, identity.as_ref());
             if let Some(cached) = &media
                 && cached.is_fresh()
             {
                 let mut r = ResultData::new(url.to_string());
+                r.key = identity.into_owned();
                 r.status = status::SUCCESS.to_string();
                 r.source = Some(source::CACHE.to_string());
                 r.media = cached.clone();
-                done.insert(url.to_string(), r);
+                done.insert(r.key.clone(), r);
                 continue;
             }
 
-            let mut item = serde_json::json!({ "url": url });
-            if let Some(cached) = &media
-                && !cached.cache.is_empty()
-            {
-                item["cache"] = serde_json::Value::String(cached.cache.clone());
-            }
+            let item =
+                wire_item(request, media.as_ref().map(|m| m.cache.as_str()).filter(|c| !c.is_empty()));
             stale_items.push(item);
         }
 
@@ -637,20 +721,21 @@ impl Client {
     }
 
     fn cache_server_result(&self, result: &mut ResultData, renewed_cache: Option<&str>) {
+        let identity = result.identity().to_string();
         if result.source.as_deref() == Some(source::NOT_MODIFIED) {
-            if let Some(mut cached) = media_from_caches(&self.caches, &result.url) {
+            if let Some(mut cached) = media_from_caches(&self.caches, &identity) {
                 if let Some(token) = renewed_cache {
                     cached.cache = token.to_owned();
                 }
                 result.media = cached;
                 if renewed_cache == Some("") {
-                    remove_from_caches(&self.caches, &result.url);
+                    remove_from_caches(&self.caches, &identity);
                 } else {
-                    put_all_caches(&self.caches, &result.url, &result.media);
+                    put_all_caches(&self.caches, &identity, &result.media);
                 }
             }
         } else if result.status != status::INTERMEDIATE {
-            put_all_caches(&self.caches, &result.url, &result.media);
+            put_all_caches(&self.caches, &identity, &result.media);
         }
     }
 
@@ -662,22 +747,23 @@ impl Client {
     fn finish_stream_result(
         &self,
         item: serde_json::Value,
-        pending: &mut HashSet<String>,
+        pending: &mut HashMap<String, ThumbRequest>,
         request_url: &reqwest::Url,
     ) -> Option<ResultData> {
         let (mut result, renewed_cache) = parse_server_result(item).ok()?;
         if result.url.is_empty() {
             return None;
         }
+        let identity = result.identity().to_string();
         if let Err(e) = result.resolve_pin(request_url) {
-            pending.remove(&result.url);
+            settle_pending(pending, &identity, &result.url);
             result.set_client_error(&e);
             result.pin = None;
             return Some(result);
         }
         self.cache_server_result(&mut result, renewed_cache.as_deref());
         if result.status != status::INTERMEDIATE {
-            pending.remove(&result.url);
+            settle_pending(pending, &identity, &result.url);
         }
         Some(result)
     }
@@ -709,7 +795,12 @@ mod tests {
     fn intermediate_results_do_not_seed_the_cache() {
         let client = Client::with_caches(None, vec![Box::new(MemoryCache::default())]);
         let request_url = reqwest::Url::parse("https://server.test/batch").unwrap();
-        let mut pending = HashSet::new();
+        let mut pending: HashMap<String, ThumbRequest> = [(
+            "https://media.test/pic.svg".to_string(),
+            ThumbRequest::url("https://media.test/pic.svg"),
+        )]
+        .into_iter()
+        .collect();
 
         let mut intermediate = ResultData::new("https://media.test/pic.svg".to_string());
         intermediate.status = status::INTERMEDIATE.to_string();

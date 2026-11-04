@@ -82,6 +82,9 @@ const mediaUrls = [
 for await (const result of tbr.stream(mediaUrls)) {
   console.log(result.url, result.status);
 }
+
+// Requests can carry an explicit cache key. A plain string still works.
+await tbr.thumb({ url: "https://demo.thumbrella.dev/media/padres-stereo.exr?sig=1", key: "padres" });
 ```
 
 ## Result and media
@@ -89,6 +92,7 @@ for await (const result of tbr.stream(mediaUrls)) {
 ### Result
 
 ```ts
+result.key           // string - effective cache identity (request key or canonical URL)
 result.url           // string - the requested URL
 result.status        // "success" | "failed" | "overloaded" | "intermediate" | ...
 result.source        // string | null - "render" | "cache" | "fallback" | "placeholder" | ...

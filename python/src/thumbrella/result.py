@@ -21,6 +21,10 @@ class Result:
     The top level ``url`` attribute contains the origin url the request was made
     for.
 
+    The top level ``key`` attribute contains the effective cache identity for
+    the request.  This is the caller-supplied request key when one was given,
+    otherwise the canonical form of ``url``.
+
     The ``status`` attribute is used to help determine how this result should be
     handled. All statuses will still include an image, even for failures.
     Comparing the status to the defined values like
@@ -59,7 +63,7 @@ class Result:
 
     """
     __slots__ = (
-        "url", "status", "message", "source", "duration", "download_size",
+        "key", "url", "status", "message", "source", "duration", "download_size",
         "http_status", "pin", "media", "raw", "__weakref__",
     )
 
@@ -71,6 +75,7 @@ class Result:
         thumbnail: EncodedJpeg | None = None,
     ) -> None:
         assert not (media and thumbnail), "cannot override media and override thumbnail on result"
+        self.key: str = str(data.get("key") or "")
         self.url: str = data.get("url", "")
         self.status: str = data.get("status", Status.UNAVAILABLE)
         self.message: str | None = data.get("message")
@@ -95,9 +100,16 @@ class Result:
         cls,
         url: str,
         message: str,
+        key: str | None = None,
     ) -> Result:
         """Build result from client side failure or unresponsive server."""
-        data = {"url": url, "status": Status.FAILED, "source": Source.CLIENT, "message": message}
+        data = {
+            "key": key or "",
+            "url": url,
+            "status": Status.FAILED,
+            "source": Source.CLIENT,
+            "message": message,
+        }
         return Result(data, thumbnail=_failed_thumbnail())
     
     def __repr__(self) -> str:

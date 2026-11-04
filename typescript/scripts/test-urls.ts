@@ -411,6 +411,74 @@ async function testStreamCacheFailure(): Promise<void> {
   }
 }
 
+async function testRequestKeys(): Promise<void> {
+  const url = "https://media.test/avatar.png?X-Amz-Signature=one";
+  const canonical = "https://media.test/avatar.png";
+  const fresh = `${(Math.floor(Date.now() / 1000) + 3600).toString(16)}:tok`;
+  const calls: { items: Record<string, unknown>[] }[] = [];
+
+  globalThis.fetch = async (_input, init) => {
+    const { items } = JSON.parse(String(init?.body)) as { items: Record<string, unknown>[] };
+    calls.push({ items });
+    const lines = items.map((item) => JSON.stringify({
+      key: item.key ?? canonical,
+      url: item.url,
+      status: Status.SUCCESS,
+      media: { url: canonical, cache: fresh },
+    }));
+    return new Response(lines.join("\n"));
+  };
+
+  const cache = new MemoryCache();
+  const client = new Client({ connect: "https://server.test/api", caches: [cache] });
+  const results = await client.batch([
+    { url, key: "avatar/1" },
+    { url, key: "avatar/2" },
+    url,
+  ]);
+
+  assert.deepEqual(
+    results.map((r) => r.key),
+    ["avatar/1", "avatar/2", canonical],
+    "results echo the caller key or canonical URL",
+  );
+  assert.deepEqual(
+    calls[0]?.items.map((item) => item.key),
+    ["avatar/1", "avatar/2", undefined],
+    "caller keys are sent on the wire",
+  );
+  assert.equal(cache.size, 3, "the same URL caches independently per key");
+  assert.ok(await mediaFromCaches([cache], url, "avatar/1"));
+  assert.ok(await mediaFromCaches([cache], url, "avatar/2"));
+
+  const [again] = await client.batch([{ url, key: "avatar/1" }]);
+  assert.equal(again.key, "avatar/1");
+  assert.equal(again.status, Status.SUCCESS);
+  assert.equal(calls.length, 1, "keyed entries are fresh cache hits");
+}
+
+async function testRequestExtrasPassThrough(): Promise<void> {
+  const url = "https://media.test/a.png";
+  let seen: Record<string, unknown>[] = [];
+  globalThis.fetch = async (_input, init) => {
+    const { items } = JSON.parse(String(init?.body)) as { items: Record<string, unknown>[] };
+    seen = items;
+    return new Response(items.map((item) => JSON.stringify({
+      key: item.key ?? url,
+      url: item.url,
+      status: Status.SUCCESS,
+      media: { url },
+    })).join("\n"));
+  };
+  const client = new Client({ connect: "https://server.test/api", caches: [] });
+  await client.batch([{ url, key: "k", futureOption: 7, nested: { a: 1 } }]);
+  assert.deepEqual(
+    seen,
+    [{ url, key: "k", futureOption: 7, nested: { a: 1 } }],
+    "unknown per-request fields are forwarded to the server",
+  );
+}
+
 async function main(): Promise<void> {
   try {
     await testRemoveFromCaches();
@@ -418,6 +486,8 @@ async function main(): Promise<void> {
     await testDistinctVariants();
     await testRevalidation();
     await testCanonicalCacheKeys();
+    await testRequestKeys();
+    await testRequestExtrasPassThrough();
     await testFailuresAreNotCachedFresh();
     await testIntermediateDoesNotWinCache();
     await testNotModifiedRenewsOnlyCacheToken();

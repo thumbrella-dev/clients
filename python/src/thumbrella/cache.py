@@ -199,17 +199,31 @@ def is_cache_fresh(cache_value: str) -> bool:
 
 
 # internal
-def media_from_caches(caches: Sequence[Cache], url: str) -> "Media | None":
-    """Get cached media for a raw URL from a stack of caches.
+def cache_identity(url: str, key: str | None = None) -> str:
+    """Effective cache identity for a request.
 
-    The URL is canonicalised once, so every cache in the stack sees the same
+    A caller-supplied key is used verbatim; otherwise the URL's canonical form
+    is used. This mirrors how the server addresses cache entries.
+    """
+    return key if key else _cache_key(url)
+
+
+# internal
+def media_from_caches(
+    caches: Sequence[Cache],
+    url: str,
+    key: str | None = None,
+) -> "Media | None":
+    """Get cached media for a request from a stack of caches.
+
+    The identity is resolved once, so every cache in the stack sees the same
     key. A fresh entry wins over a stale one; otherwise the first entry found
     is returned so its ``cache`` token can be used for revalidation.
     """
-    key = _cache_key(url)
+    identity = cache_identity(url, key)
     stale: "Media | None" = None
     for cache in caches:
-        media = cache.get(key)
+        media = cache.get(identity)
         if media is None:
             continue
         if media.is_fresh():
@@ -224,18 +238,23 @@ def put_all_caches(
     caches: Sequence[Cache],
     url: str,
     media: "Media | None",
+    key: str | None = None,
 ) -> None:
-    """Store media in every cache under the raw URL's canonical key."""
+    """Store media in every cache under the request's identity."""
     if media is None:
         return
-    key = _cache_key(url)
+    identity = cache_identity(url, key)
     for cache in caches:
-        cache.put(key, media)
+        cache.put(identity, media)
 
 
 # internal
-def remove_from_caches(caches: Sequence[Cache], url: str) -> None:
-    """Remove a raw URL from every cache in a stack."""
-    key = _cache_key(url)
+def remove_from_caches(
+    caches: Sequence[Cache],
+    url: str,
+    key: str | None = None,
+) -> None:
+    """Remove a request from every cache in a stack."""
+    identity = cache_identity(url, key)
     for cache in caches:
-        cache.remove(key)
+        cache.remove(identity)

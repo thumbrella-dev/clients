@@ -4,15 +4,28 @@ from __future__ import annotations
 
 import importlib.metadata
 from urllib.parse import urljoin
-from typing import Any, AsyncIterator, Sequence
+from typing import Any, AsyncIterator, Mapping, Sequence, Union
 
 import requests
 
-from .cache import Cache, MemoryCache, media_from_caches, put_all_caches, remove_from_caches
+from .cache import (
+    Cache,
+    MemoryCache,
+    cache_identity,
+    media_from_caches,
+    put_all_caches,
+    remove_from_caches,
+)
 from .constants import DEFAULT_BASE, HTTP_TIMEOUT, Source, Status, BATCH_MAX_ITEMS
 from .result import Result, EncodedJpeg
 from .errors import ConnectionError, TimeoutError, VerifyError, ThumbError
 from .http import parse_connect, requests_json, aio_ndjson
+
+#: A thumbnail request value: a plain URL string, or a mapping with ``url`` and
+#: an optional ``key``.  Any additional mapping entries are forwarded to the
+#: server as-is, so future per-request options need no client change.  Both
+#: forms are accepted everywhere requests are taken.
+ThumbRequest = Union[str, Mapping[str, Any]]
 
 
 class Client:
@@ -156,7 +169,7 @@ class Client:
             "(Thumbrella Cloud requires one)"
         )
 
-    def thumb(self, url: str) -> Result:
+    def thumb(self, url: ThumbRequest) -> Result:
         """Get a single url result and fail if unsuccessful.
 
         This is a shortcut to regular `batch()` for simple use cases. If
@@ -184,7 +197,7 @@ class Client:
         """
         return self.batch((url, ))[0].verify()
 
-    def batch(self, urls: Sequence[str]) -> list[Result]:
+    def batch(self, urls: Sequence[ThumbRequest]) -> list[Result]:
         """Generate multiple thumbnail results.
 
         Generate a list of ``Result`` objects for the given urls. The returned
@@ -230,11 +243,11 @@ class Client:
                         item, caches=self.caches, server_key=self.base_url,
                         request_url=self.base_url + "/batch",
                     )
-                    done[result.url] = result
+                    _store_result(done, result)
 
         return _ordered_results(done, urls)
 
-    async def stream(self, urls: Sequence[str]) -> AsyncIterator[Result]:
+    async def stream(self, urls: Sequence[ThumbRequest]) -> AsyncIterator[Result]:
         """Stream multiple thumbnail results as they complete.
 
         This efficiently provides thumbnail results as they become available.
@@ -268,9 +281,10 @@ class Client:
                 print([f"{r.status} {r.url}" for r in results])
         """
         done, stale = _preflight_urls(urls, self.caches)
-        for url in urls:
-            if url in done:
-                yield done[url]
+        for url, _key, identity in (_resolve_request(u) for u in urls):
+            result = done.get(identity) or done.get(url)
+            if result is not None:
+                yield result
         if not stale:
             return
 
@@ -291,7 +305,11 @@ class Client:
         # Split into server-sized chunks.
         for i in range(0, len(stale), BATCH_MAX_ITEMS):
             chunk = stale[i:i + BATCH_MAX_ITEMS]
-            pending: set[str] = {item["url"] for item in chunk}
+            pending: dict[str, tuple[str, str | None]] = {}
+            for item in chunk:
+                item_url = str(item.get("url", ""))
+                item_key = item.get("key")
+                pending[cache_identity(item_url, item_key)] = (item_url, item_key)
             msg = ""
             try:
                 async for result_data in aio_ndjson(
@@ -302,7 +320,7 @@ class Client:
                     if not item_url or "status" not in result_data:
                         continue
                     if result_data.get("status") != Status.INTERMEDIATE:
-                        pending.discard(item_url)
+                        _settle_pending(pending, result_data)
                     result = _result_from_server(
                         result_data, caches=self.caches, server_key=self.base_url,
                         request_url=self.base_url + "/batch",
@@ -311,8 +329,8 @@ class Client:
             except Exception as exc:
                 msg = str(exc) or type(exc).__name__
 
-            for item_url in pending:
-                yield Result.client_fail(item_url, msg or "stream connection lost")
+            for identity, (item_url, _item_key) in pending.items():
+                yield Result.client_fail(item_url, msg or "stream connection lost", identity)
 
     def reset_caches(self) -> None:
         """Reset all attached caches.
@@ -361,6 +379,69 @@ def _client_user_agent() -> str:
 _PLACEHOLDER_CACHE: dict[str, dict[str, EncodedJpeg]] = {}
 
 
+def _resolve_request(request: ThumbRequest) -> tuple[str, str | None, str]:
+    """Flatten a request value into ``(url, key, identity)``."""
+    if isinstance(request, str):
+        url = request
+        key = None
+    else:
+        url = str(request.get("url") or "")
+        raw_key = request.get("key")
+        key = raw_key.strip() if isinstance(raw_key, str) and raw_key.strip() else None
+    return url, key, cache_identity(url, key)
+
+
+def _wire_item(request: ThumbRequest, cache: str | None = None) -> dict[str, Any]:
+    """Build the server request item, preserving forward-compatible fields."""
+    if isinstance(request, str):
+        item: dict[str, Any] = {"url": request}
+    else:
+        item = dict(request)
+        item["url"] = str(item.get("url") or "")
+        raw_key = item.get("key")
+        key = raw_key.strip() if isinstance(raw_key, str) else ""
+        if key:
+            item["key"] = key
+        else:
+            item.pop("key", None)
+    if cache is not None:
+        item["cache"] = cache
+    return item
+
+
+def _result_identity(result: Result) -> str:
+    """Effective identity of a result, tolerating older servers without key."""
+    return result.key or result.url
+
+
+def _data_identity(data: Mapping[str, Any]) -> str:
+    """Effective identity of a raw server result, tolerating older servers."""
+    return str(data.get("key") or data.get("url") or "")
+
+
+def _store_result(done: dict[str, Result], result: Result) -> None:
+    """Index a result by identity, with the echoed URL as legacy fallback."""
+    done[_result_identity(result)] = result
+    done[result.url] = result
+
+
+def _settle_pending(
+    pending: dict[str, tuple[str, str | None]],
+    data: Mapping[str, Any],
+) -> None:
+    """Remove a completed request from the pending map."""
+    identity = _data_identity(data)
+    if identity in pending:
+        del pending[identity]
+        return
+    # Older servers omit ``key``; fall back to the echoed URL.
+    item_url = data.get("url")
+    for pending_identity, (url, _key) in pending.items():
+        if url == item_url:
+            del pending[pending_identity]
+            return
+
+
 def _result_from_server(
     item: dict[str, Any],
     *,
@@ -374,13 +455,16 @@ def _result_from_server(
     - Placeholder thumbnails share :class:`EncodedJpeg` blobs across results.
     - Normal results construct fresh objects.
     - Intermediate frames are not cached; terminal media is stored in all
-      *caches* under the requested URL's canonical key.
+      *caches* under the request's effective cache identity.
     """
     url = item.get("url", "")
+    key = item.get("key") or None
     source = item.get("source")
     placeholder = item.get("placeholder")
 
-    cached_media = media_from_caches(caches, url) if source == Source.NOT_MODIFIED else None
+    cached_media = (
+        media_from_caches(caches, url, key) if source == Source.NOT_MODIFIED else None
+    )
     if source == Source.NOT_MODIFIED:
         result = Result(item, media=cached_media) if cached_media is not None else Result(item)
     elif placeholder:
@@ -400,13 +484,13 @@ def _result_from_server(
             if isinstance(renewed_cache, str):
                 cached_media.cache = renewed_cache
             if renewed_cache == "":
-                remove_from_caches(caches, result.url)
+                remove_from_caches(caches, result.url, key)
             else:
-                put_all_caches(caches, result.url, cached_media)
+                put_all_caches(caches, result.url, cached_media, key)
     elif result.status != Status.INTERMEDIATE:
         # Intermediates are progress frames, not answers. Caching one would
         # let a placeholder replace a final result.
-        put_all_caches(caches, result.url, result.media)
+        put_all_caches(caches, result.url, result.media, key)
     return result
 
 
@@ -423,61 +507,66 @@ def _placeholder_thumb(server_key: str, placeholder: str, b64: str) -> EncodedJp
 
 def _fail_all(
     done: dict[str, Result],
-    items: Sequence[dict[str, str]],
-    urls: Sequence[str],
+    items: Sequence[dict[str, Any]],
+    requests: Sequence[ThumbRequest],
     message: str,
 ) -> list[Result]:
-    """Mark *items* as failed and return ordered Results for *urls*."""
+    """Mark *items* as failed and return ordered Results for *requests*."""
     for item in items:
-        url = item["url"]
-        done[url] = Result.client_fail(url, message)
-    return _ordered_results(done, urls)
+        url, key, identity = _resolve_request(item)
+        _store_result(done, Result.client_fail(url, message, identity))
+    return _ordered_results(done, requests)
 
 
 def _ordered_results(
     done: dict[str, Result],
-    urls: Sequence[str],
+    requests: Sequence[ThumbRequest],
 ) -> list[Result]:
-    """Return Results in *urls* order, filling gaps with client-fail Results."""
+    """Return Results in *requests* order, filling gaps with client-fail Results."""
     results: list[Result] = []
-    for url in urls:
-        result = done.get(url)
+    for url, _key, identity in (_resolve_request(request) for request in requests):
+        result = done.get(identity) or done.get(url)
         if result is None:
-            result = Result.client_fail(url, "internal error: no result")
+            result = Result.client_fail(url, "internal error: no result", identity)
         results.append(result)
     return results
 
 
 def _preflight_urls(
-    urls: Sequence[str],
+    requests: Sequence[ThumbRequest],
     caches: Sequence[Cache],
-) -> tuple[dict[str, Result], list[dict[str, str]]]:
+) -> tuple[dict[str, Result], list[dict[str, Any]]]:
     """Check caches and validate URLs.
 
-    Returns ``(done, stale)`` where *done* maps url → Result for items
-    resolved without a server call, and *stale* is a list of
-    ``{"url": ..., "cache": ...}`` dicts to send to the server.
+    Returns ``(done, stale)`` where *done* maps cache identity → Result for
+    items resolved without a server call, and *stale* is a list of
+    ``{"url": ..., "key"?: ..., "cache"?: ...}`` dicts for the server.
     """
     done: dict[str, Result] = {}
-    stale: list[dict[str, str]] = []
+    stale: list[dict[str, Any]] = []
 
-    for url in urls:
+    for request in requests:
+        url, key, identity = _resolve_request(request)
         # Basic URL validation, must have a scheme.
         if not url or "://" not in url:
-            done[url] = Result.client_fail(url, "invalid URL")
+            _store_result(done, Result.client_fail(url, "invalid URL", identity))
             continue
 
-        media = media_from_caches(caches, url)
+        media = media_from_caches(caches, url, key)
         if media is not None and media.is_fresh():
-            data = {"url": url, "status": Status.SUCCESS, "source": Source.CLIENT}
-            done[url] = Result(data, media=media)
+            data = {
+                "key": identity,
+                "url": url,
+                "status": Status.SUCCESS,
+                "source": Source.CLIENT,
+            }
+            done[identity] = Result(data, media=media)
+            done[url] = done[identity]
             continue
 
         # Stale, build the server request. Include the cache token from any
-        # cached media so the server can do a conditional revalidation.
-        item: dict[str, str] = {"url": url}
-        if media is not None and media.cache:
-            item["cache"] = media.cache
-        stale.append(item)
+        # cached media so the server can do a conditional revalidation, and
+        # forward any additional per-request fields unchanged.
+        stale.append(_wire_item(request, media.cache if media is not None and media.cache else None))
 
     return done, stale

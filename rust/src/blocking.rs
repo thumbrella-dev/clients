@@ -1,7 +1,7 @@
 //! Blocking (synchronous) client, gated behind the `blocking` feature.
 
 use crate::client::Client as AsyncClient;
-use crate::types::{Error, ResultData};
+use crate::types::{Error, ResultData, ThumbRequest};
 
 /// Synchronous Thumbrella client, wraps the async client with a tokio
 /// runtime so callers never see `.await`.
@@ -22,17 +22,25 @@ impl Client {
         self.rt.block_on(self.inner.verify())
     }
 
-    pub fn thumb(&self, url: &str) -> Result<ResultData, Error> {
-        self.rt.block_on(self.inner.thumb(url))
+    pub fn thumb(&self, request: impl Into<ThumbRequest>) -> Result<ResultData, Error> {
+        self.rt.block_on(self.inner.thumb(request))
     }
 
-    pub fn batch(&self, urls: &[&str]) -> Result<Vec<ResultData>, Error> {
-        self.rt.block_on(self.inner.batch(urls))
+    pub fn batch<I, R>(&self, requests: I) -> Result<Vec<ResultData>, Error>
+    where
+        I: IntoIterator<Item = R>,
+        R: Into<ThumbRequest>,
+    {
+        self.rt.block_on(self.inner.batch(requests))
     }
 
-    pub fn stream(&self, urls: &[&str]) -> Result<Vec<ResultData>, Error> {
+    pub fn stream<I, R>(&self, requests: I) -> Result<Vec<ResultData>, Error>
+    where
+        I: IntoIterator<Item = R>,
+        R: Into<ThumbRequest>,
+    {
         use futures_util::StreamExt;
-        Ok(self.rt.block_on(async { self.inner.stream(urls).collect::<Vec<_>>().await }))
+        Ok(self.rt.block_on(async { self.inner.stream(requests).collect::<Vec<_>>().await }))
     }
 
     pub fn base_url(&self) -> &str {
