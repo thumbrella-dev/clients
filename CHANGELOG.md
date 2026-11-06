@@ -1,5 +1,10 @@
 # Thumbrella clients changelog
 
+## Development
+
+- Ensure Media has is_fresh (or isFresh) on all clients  /typescript /rust
+- Ensure Result also has a fresh check, although it is soft deprecated  /python
+
 ## 2.3.1 - 2026/11/04 
 
 - Support "cache: uncached" on requests  /typescript /python /rust

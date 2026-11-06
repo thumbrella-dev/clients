@@ -4,7 +4,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from thumbrella import Client, MemoryCache
+from thumbrella import Client, MemoryCache, Result, Status
 from thumbrella.cache import media_from_caches, put_all_caches
 from thumbrella.client import (
     _preflight_urls,
@@ -41,6 +41,23 @@ class KeyTests(unittest.TestCase):
         self.assertIsNotNone(media_from_caches([cache], url, "avatar/1"))
         self.assertIsNone(media_from_caches([cache], url, "avatar/2"))
         self.assertIsNone(media_from_caches([cache], url))
+
+    def test_result_helpers_treat_intermediate_as_success(self):
+        for status, expected in [
+            (Status.SUCCESS, True),
+            (Status.INTERMEDIATE, True),
+            (Status.FAILED, False),
+            (Status.OVERLOADED, False),
+        ]:
+            result = Result({"url": "https://media.test/x", "status": status})
+            self.assertEqual(result.is_success(), expected, status)
+
+        fresh = Result({
+            "url": "https://media.test/x",
+            "status": Status.SUCCESS,
+            "media": {"cache": "ffffffffff:AAA"},
+        })
+        self.assertTrue(fresh.is_fresh())
 
     def test_caller_cache_is_forwarded_and_uncached_bypasses_the_client_cache(self):
         url = "https://media.test/model.obj"

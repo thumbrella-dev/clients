@@ -51,7 +51,7 @@ npm install @thumbrella/client
 
 For a static web page, import directly from the CDN and avoid the
 npm operations with
-`import { tbrSetup } from "https://js.thumbrella.dev/2.0/tbr.js";`
+`import { tbrSetup } from "https://js.thumbrella.dev/2.3/tbr.js";`
 
 The `tbrSetup` call registers `<tbr-thumb>`, creates the page-wide client and
 cache stack, and enables shared batching. Every element uses that single global
@@ -104,8 +104,7 @@ result.message       // string | null - error or informational message
 result.pin           // string | null - absolute URL to fetch the pinned JPEG
 result.raw           // Record<string, unknown> - raw server result
 
-result.isSuccess()   // true when status is "success"
-result.isFresh()     // true when the media cache token has not expired
+result.isSuccess()   // true for status "success" or "intermediate"
 result.verify()      // returns this on success, throws ThumbError on failure
 ```
 
@@ -127,6 +126,7 @@ media.properties   // Record<string, number> - optional format-specific metadata
 media.thumbnail    // EncodedJpeg - the thumbnail JPEG payload
 media.cache        // string - opaque cache token used for revalidation
 media.placeholder  // string - placeholder identifier, or empty for a real thumbnail
+media.isFresh()    // boolean - cache token is still fresh and reusable
 ```
 
 See the [media documentation](https://thumbrella.dev/docs/client/#media)

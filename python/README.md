@@ -112,7 +112,6 @@ result.message     # str — error or informational message
 result.pin         # str | None — reusable url to fetch thumbnail contents
 
 result.is_success()  # True for SUCCESS or INTERMEDIATE
-result.is_fresh()    # True when the server freshly rendered (not from cache)
 result.verify()      # returns self on success, raises ThumbError on failure
 ```
 
@@ -127,6 +126,7 @@ media.mime         # "image/jpeg" | "application/pdf" | ...
 media.kind         # "image" | "video" | "document" | "vector" | "geometry" | ...
 media.file_size    # int — original file size in bytes
 media.thumbnail    # EncodedJpeg — the thumbnail JPEG bytes
+media.is_fresh()   # bool — cache token is still fresh and reusable
 ```
 
 All the result properties are documented at, 

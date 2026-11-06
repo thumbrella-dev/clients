@@ -135,6 +135,14 @@ class Result:
             + (f" - {self.message}" if self.message else "")
         )
 
+    def is_success(self) -> bool:
+        """True for a successful final result or an intermediate preview."""
+        return self.status in (Status.SUCCESS, Status.INTERMEDIATE)
+
+    def is_fresh(self) -> bool:
+        """Compatibility convenience; prefer ``Media.is_fresh()``."""
+        return self.media is not None and self.media.is_fresh()
+
 
 class Media:
     """Data from the ``Result`` that describes the source media.

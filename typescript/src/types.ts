@@ -375,15 +375,16 @@ export class Result {
   }
 
   isSuccess(): boolean {
-    return this.status === Status.SUCCESS;
+    return this.status === Status.SUCCESS || this.status === Status.INTERMEDIATE;
   }
 
+  /** Compatibility convenience; prefer `media.isFresh()`. */
   isFresh(): boolean {
     return this.media?.isFresh() ?? false;
   }
 
   verify(): this {
-    if (this.status === Status.SUCCESS) return this;
+    if (this.isSuccess()) return this;
     throw new ThumbError(
       `thumbnail failed for ${this.url}: ${this.status}` +
         (this.message ? ` — ${this.message}` : ""),

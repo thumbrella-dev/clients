@@ -113,8 +113,7 @@ result.message       // Option<String> - error or informational message
 result.pin           // Option<String> - absolute URL to fetch the pinned JPEG
 result.raw           // serde_json::Value - raw JSON storage; Null unless populated
 
-result.is_success()  // true when status is "success"
-result.is_fresh()    // true when the media cache token has not expired
+result.is_success()  // true for status "success" or "intermediate"
 ```
 
 The client resolves `pin` against the HTTP request URL. It remains `None` when
@@ -129,6 +128,7 @@ for more details.
 ### Media
 
 ```rust
+media.key          // String - effective cache identity (request key or canonical URL)
 media.url          // String - simplified URL; use result.key for identity
 media.mime         // String - "image/jpeg" | "application/pdf" | ...
 media.kind         // String - "image" | "video" | "document" | "geometry" | ...
@@ -138,6 +138,7 @@ media.properties   // serde_json::Value - optional format-specific metadata
 media.thumbnail    // Thumbnail - the thumbnail JPEG payload
 media.cache        // String - opaque cache token used for revalidation
 media.placeholder  // String - placeholder identifier, or empty for a real thumbnail
+media.is_fresh()   // bool - cache token is still fresh and reusable
 ```
 
 See the [media documentation](https://thumbrella.dev/docs/client/#media)
@@ -149,7 +150,6 @@ for more details.
 jpeg.bytes()       // &[u8] - raw JPEG bytes
 jpeg.reader()      // std::io::Cursor<&[u8]> - zero-copy, seekable reader
 jpeg.len()         // usize - byte count
-jpeg.is_empty()    // bool - whether the payload is empty
 jpeg.key()         // u64 - content hash, useful for deduplication
 ```
 

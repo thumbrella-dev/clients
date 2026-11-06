@@ -479,9 +479,22 @@ async function testRequestExtrasPassThrough(): Promise<void> {
   );
 }
 
+function testResultStatusHelpers(): void {
+  for (const [status, expected] of [
+    [Status.SUCCESS, true],
+    [Status.INTERMEDIATE, true],
+    [Status.FAILED, false],
+    [Status.OVERLOADED, false],
+  ] as const) {
+    const result = new Result({ url: "https://media.test/x", status });
+    assert.equal(result.isSuccess(), expected, status);
+  }
+}
+
 async function main(): Promise<void> {
   try {
     await testRemoveFromCaches();
+    testResultStatusHelpers();
     await testExactEcho();
     await testDistinctVariants();
     await testRevalidation();

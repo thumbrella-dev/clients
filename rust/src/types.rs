@@ -266,6 +266,7 @@ impl Media {
         }
     }
 
+    /// True when the cache token is still fresh and reusable.
     pub fn is_fresh(&self) -> bool {
         if self.cache.is_empty() {
             return false;
@@ -551,6 +552,7 @@ impl ResultData {
         }
     }
 
+    /// Compatibility convenience; prefer `Media::is_fresh`.
     pub fn is_fresh(&self) -> bool {
         self.media.is_fresh()
     }
@@ -560,8 +562,9 @@ impl ResultData {
         if self.key.is_empty() { &self.url } else { &self.key }
     }
 
+    /// True for a successful final result or an intermediate preview.
     pub fn is_success(&self) -> bool {
-        self.status == status::SUCCESS
+        self.status == status::SUCCESS || self.status == status::INTERMEDIATE
     }
 
     pub fn set_client_error(&mut self, msg: &str) {
@@ -626,6 +629,20 @@ mod tests {
             result.pin = pin.map(str::to_owned);
             result.resolve_pin(&request).unwrap();
             assert_eq!(result.pin.as_deref(), expected);
+        }
+    }
+
+    #[test]
+    fn success_includes_intermediate() {
+        for (status, expected) in [
+            (status::SUCCESS, true),
+            (status::INTERMEDIATE, true),
+            (status::FAILED, false),
+            (status::OVERLOADED, false),
+        ] {
+            let mut result = ResultData::new("https://media.test/x".into());
+            result.status = status.to_string();
+            assert_eq!(result.is_success(), expected, "{status}");
         }
     }
 

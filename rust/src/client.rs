@@ -432,9 +432,6 @@ impl Client {
     /// # }
     /// ```
     ///
-    /// Individual results can get the same effect by checking
-    /// `result.status == status::SUCCESS`.
-    ///
     /// This call waits for the result to complete before returning.
     ///
     /// See <https://thumbrella.dev/docs/api/batch.html> for server details.
@@ -442,7 +439,7 @@ impl Client {
         let request = request.into();
         let results = self.batch([request.clone()]).await?;
         let result = results.into_iter().next().unwrap();
-        if result.status != status::SUCCESS {
+        if !result.is_success() {
             return Err(Error::Thumb {
                 url: request.as_url().to_string(),
                 status: result.status.clone(),
